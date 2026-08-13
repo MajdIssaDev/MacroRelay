@@ -530,7 +530,7 @@ Session* FindSession(int id) {
 
 extern "C" {
 
-const char* mr_version(void) { return "1.1.0"; }
+const char* mr_version(void) { return "1.2.0"; }
 
 int32_t mr_record_start(int32_t keep_delays) {
   std::lock_guard<std::mutex> lock(g_mu);
