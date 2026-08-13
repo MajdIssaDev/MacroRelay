@@ -14,16 +14,19 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+
+      - name: Flutter build
+        run: |
+          cd app
+          flutter pub get
+          flutter build windows --release
+
       - uses: actions/setup-dotnet@v4
         with:
           dotnet-version: "8.0.x"
-
-      - name: Publish
-        run: >
-          dotnet publish src/MacroRelay.App/MacroRelay.App.csproj
-          -c Release -r win-x64 --self-contained true
-          -p:PublishReadyToRun=true
-          -o publish
 
       - name: Install Velopack
         run: dotnet tool install -g vpk
@@ -32,7 +35,8 @@ jobs:
         shell: pwsh
         run: |
           $ver = "${{ github.ref_name }}".TrimStart("v")
-          vpk pack --packId MacroRelay --packVersion $ver --packDir publish --mainExe MacroRelay.exe --packTitle MacroRelay --outputDir artifacts
+          $out = "app\build\windows\x64\runner\Release"
+          vpk pack --packId MacroRelay --packVersion $ver --packDir $out --mainExe MacroRelay.exe --packTitle MacroRelay --outputDir artifacts
 
       - name: Upload to GitHub Release
         shell: pwsh

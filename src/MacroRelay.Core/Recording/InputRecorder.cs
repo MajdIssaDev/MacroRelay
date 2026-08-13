@@ -2,7 +2,6 @@ using System.Runtime.InteropServices;
 using MacroRelay.Core.Input;
 using MacroRelay.Core.Models;
 using MacroRelay.Core.Native;
-using MacroRelay.Core.Windows;
 using static MacroRelay.Core.Native.NativeMethods;
 
 namespace MacroRelay.Core.Recording;
@@ -16,7 +15,6 @@ public sealed class RecordedEvent
 public sealed class InputRecorder : IDisposable
 {
     public bool KeepDelays { get; set; } = true;
-    public int MouseMoveThresholdPx { get; set; } = 12;
     public HashSet<string> IgnoreKeys { get; } = new(StringComparer.OrdinalIgnoreCase);
 
     public event Action<MacroStep>? StepCaptured;
@@ -26,8 +24,6 @@ public sealed class InputRecorder : IDisposable
     private HookProc? _kbProc;
     private HookProc? _mouseProc;
     private long _lastTicks;
-    private int _lastMoveX;
-    private int _lastMoveY;
     private bool _started;
     private readonly object _gate = new();
 
@@ -42,8 +38,6 @@ public sealed class InputRecorder : IDisposable
             _kbProc = KeyboardHook;
             _mouseProc = MouseHook;
             _lastTicks = Environment.TickCount64;
-            _lastMoveX = int.MinValue;
-            _lastMoveY = int.MinValue;
             var module = GetModuleHandle(null);
             _kbHook = SetWindowsHookEx(WhKeyboardLl, _kbProc, module, 0);
             _mouseHook = SetWindowsHookEx(WhMouseLl, _mouseProc, module, 0);
@@ -128,12 +122,7 @@ public sealed class InputRecorder : IDisposable
                 case WmXbuttonup:
                     EmitMouseButton(msg, data);
                     break;
-                case WmMousewheel:
-                    EmitWheel(data);
-                    break;
-                case WmMousemove:
-                    EmitMove(data);
-                    break;
+                // Ignore WM_MOUSEMOVE / WM_MOUSEWHEEL — clicks get X,Y only if the user sets them.
             }
         }
         return CallNextHookEx(_mouseHook, nCode, wParam, lParam);
@@ -158,52 +147,9 @@ public sealed class InputRecorder : IDisposable
         {
             Type = StepType.Mouse,
             MouseButton = button,
-            MouseStroke = down ? MouseStroke.Down : MouseStroke.Up,
-            X = data.Pt.X,
-            Y = data.Pt.Y,
-            CoordinateMode = CoordinateMode.Screen
+            MouseStroke = down ? MouseStroke.Down : MouseStroke.Up
         };
         Emit(delay, step);
-    }
-
-    private void EmitWheel(MsllHookStruct data)
-    {
-        short delta = unchecked((short)((data.MouseData >> 16) & 0xFFFF));
-        int delay = ConsumeDelay();
-        Emit(delay, new MacroStep
-        {
-            Type = StepType.Mouse,
-            MouseStroke = MouseStroke.Wheel,
-            WheelDelta = delta,
-            X = data.Pt.X,
-            Y = data.Pt.Y,
-            CoordinateMode = CoordinateMode.Screen
-        });
-    }
-
-    private void EmitMove(MsllHookStruct data)
-    {
-        if (_lastMoveX == int.MinValue)
-        {
-            _lastMoveX = data.Pt.X;
-            _lastMoveY = data.Pt.Y;
-            return;
-        }
-        int dx = data.Pt.X - _lastMoveX;
-        int dy = data.Pt.Y - _lastMoveY;
-        if (dx * dx + dy * dy < MouseMoveThresholdPx * MouseMoveThresholdPx)
-            return;
-        _lastMoveX = data.Pt.X;
-        _lastMoveY = data.Pt.Y;
-        int delay = ConsumeDelay();
-        Emit(delay, new MacroStep
-        {
-            Type = StepType.Mouse,
-            MouseStroke = MouseStroke.Move,
-            X = data.Pt.X,
-            Y = data.Pt.Y,
-            CoordinateMode = CoordinateMode.Screen
-        });
     }
 
     private void Emit(int delay, MacroStep step)

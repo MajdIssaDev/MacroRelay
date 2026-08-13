@@ -4,13 +4,15 @@ publish/
 Releases/
 artifacts/
 .vs/
+.dart_tool/
+**/build/
+native/build/
 *.user
 *.suo
 *.userosscache
 *.sln.docstates
 [Dd]ebug/
 [Rr]elease/
-artifacts/
 *.nupkg
 .idea/
 *.DotSettings.user

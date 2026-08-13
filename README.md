@@ -1,90 +1,85 @@
 # MacroRelay
 
-Lightweight Windows app to record, edit, and play multiple macros at once. Target a specific window, use window-relative mouse coordinates, and keep working while a macro runs.
+Lightweight Windows macro recorder and player. Flutter desktop UI over a C++ engine that uses low-level hooks and `SendInput`.
 
 Windows 10/11 x64.
 
 ## Install
 
-1. Open the [Releases](https://github.com/MajdIssaDev/MacroRelay/releases) page.
-2. Download **`MacroRelay-win-Setup.exe`** and run it.
-3. Or download the portable zip if you do not want an installer.
+1. Open [Releases](https://github.com/MajdIssaDev/MacroRelay/releases).
+2. Download **MacroRelay-win-Setup.exe** (or the portable zip).
+3. Unsigned builds may show SmartScreen — **More info → Run anyway**.
 
-You can also clone this repository and build from source (see below).
-
-The first launch of an unsigned build may show a SmartScreen warning. That is expected until the installer is code-signed.
-
-## Features
-
-- Multiple macros, including several running at the same time (input is queued so keys do not scramble)
-- Record real keyboard/mouse input, with or without delays
-- Add steps from a searchable palette (`Ctrl+K`) or a right-click category menu
-- Keyboard, mouse, wait, type text, paste text
-- Loop forever, repeat N times, or stop after a time limit
-- Loop interval, playback speed, and optional timing jitter
-- Per-macro hotkeys plus global Start / Pause / Stop / Panic / Record
-- Window targeting by process name, title, class, and PID (picker included)
-- Mouse X,Y relative to the target window’s client area
-- Playback modes: foreground, focus-target then send, or background window messages
-- Import / export JSON
-- Optional Run as Administrator
-- System tray, start with Windows, dark/light/system theme
-- Auto-update on launch and **Check for updates** in Settings
-
-## Window targeting (honest limits)
-
-Macros resolve a **window handle** from process name + title/class/PID. Parent process ID (PPID) is not used; launchers often are not the window you want.
-
-| Mode | What it does | Typical result |
-| --- | --- | --- |
-| Foreground | `SendInput` to whatever is focused | Same idea as a simple AutoHotkey script |
-| Focus target | Activates the chosen window, then `SendInput` | Most reliable for apps and many games |
-| Background messages | `PostMessage` to that HWND without stealing focus | Some Win32 apps. **Not most games** (DirectInput / Raw Input / anti-cheat) |
-
-There is no kernel driver and no anti-cheat bypass. Game overlays that block background input will not receive it.
-
-## Usage
-
-1. Add a macro and give it a name.
-2. Record input, or right-click the step list → category, or press `Ctrl+K` to search.
-3. Set loop interval (the old 50 ms auto-presser lives here), speed, and jitter.
-4. Optionally pick a target window and choose a playback mode.
-5. Press **Start** (or the macro hotkey / **F6** for start-all by default).
-
-Default global shortcuts (change in Settings):
-
-- `F6` start all enabled macros
-- `F7` pause all
-- `F8` stop all
-- `Ctrl+Shift+Escape` panic (stop everything and release held keys)
-- `F9` record into the selected macro
-
-## Build from source
-
-Requirements: [.NET 8 SDK](https://dotnet.microsoft.com/download/dotnet/8.0) on Windows.
+From source:
 
 ```powershell
-dotnet build MacroRelay.sln -c Release
-dotnet run --project src/MacroRelay.App/MacroRelay.App.csproj -c Release
+cd app
+flutter pub get
+flutter run -d windows
 ```
 
-Create an installer (Velopack):
+## Recording (no path bloat)
 
-```powershell
-powershell -ExecutionPolicy Bypass -File .\build.ps1
+The native hook **ignores `WM_MOUSEMOVE` and wheel data**. It only stores:
+
+- keyboard key down / up
+- mouse button down / up (left, right, middle, X1, X2)
+
+Clicks do **not** record a travel path. If you need a click at a point, right-click the sequence and insert **Mouse click at X,Y** (client coordinates relative to the target window).
+
+Optional **Keep delays** stores waits between those state changes only.
+
+## Playback and window targeting
+
+| Mode | Behavior |
+| --- | --- |
+| Foreground | `SendInput` goes to whatever is focused |
+| Focus target | Activates the chosen process/title, then `SendInput` |
+
+Mouse X,Y with a target window are **client-relative** (`ClientToScreen` at play time).
+
+### What this will not do
+
+Modern games (GTA V and similar) often read **DirectInput / Raw Input** and ignore posted Windows messages. Sending input while you use another app, without focusing the game, requires either **injecting a DLL into the game** or a **kernel/virtual HID driver**. MacroRelay does **not** implement those:
+
+- injecting into other processes is a cheat/malware technique
+- filter drivers that spoof hardware to a specific PID are out of scope
+
+Use **Focus target** and keep the game in the foreground for titles like that.
+
+The C++ library lives in `native/` and is loaded by Flutter via FFI (`macro_relay_native.dll`).
+
+## UI
+
+Dark “ops” dashboard:
+
+- multiple macros in the sidebar
+- repeat: infinite / count / time limit
+- speed multiplier dropdown
+- humanized jitter toggle
+- right-click (or Ctrl+K) to insert text, keys, or clicks at X,Y
+- Start / Pause / Stop / Record
+- **Check for updates** (GitHub Releases)
+
+## Layout
+
 ```
-
-Output is under `artifacts\`.
+app/        Flutter Windows frontend (FFI)
+native/     C++ engine (hooks + SendInput)
+src/        Legacy WPF app (same recording filter applied)
+```
 
 ## Auto-update
 
-Installed copies check GitHub Releases on startup (can be turned off) and from **Settings → Check for updates**. After you install with `Setup.exe`, later tags published by the release workflow become updates.
+Installed copies can be packed with Velopack from the Flutter `Release` folder. The app also queries GitHub Releases on demand (and optionally on launch) and opens the latest release page.
 
-Set **GitHub owner** in Settings to match the repository owner if the app did not detect it.
+## Build installer
 
-## Data
-
-Macros and settings are stored in `%APPDATA%\MacroRelay\`.
+```powershell
+flutter build windows --release
+# output: app\build\windows\x64\runner\Release\MacroRelay.exe
+powershell -ExecutionPolicy Bypass -File .\build.ps1
+```
 
 ## License
 
