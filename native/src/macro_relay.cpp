@@ -454,14 +454,11 @@ void PlayStep(Session& s, const Step& step) {
       break;
     case MR_KIND_MOUSE: {
       if (step.has_pos) {
-        HWND hwnd = FindTarget(s.process, s.title);
-        if (hwnd) {
-          POINT pt{step.x, step.y};
-          ClientToScreen(hwnd, &pt);
-          MoveAbs(pt.x, pt.y);
-        } else {
-          MoveAbs(step.x, step.y);
+        HWND target = hwnd ? hwnd : GetForegroundWindow();
+        if (target) {
+          PostMouse(target, step.code, step.down != 0, step.x, step.y);
         }
+        break;
       }
       if (step.down) {
         SendMouseButton(step.code, true);

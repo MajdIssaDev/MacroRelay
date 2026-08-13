@@ -788,6 +788,9 @@ class _DashboardPageState extends State<DashboardPage> {
   Widget _stepSquare(MacroDef m, int i) {
     final step = m.steps[i];
     final on = selectedIndices.contains(i);
+    final parts = step.shortLabel.split('\n');
+    final glyph = parts.first;
+    final detail = parts.length > 1 ? parts.sublist(1).join('\n') : '';
     return Tooltip(
       message: '${step.label}\nClick to select · right-click to insert',
       child: GestureDetector(
@@ -818,16 +821,30 @@ class _DashboardPageState extends State<DashboardPage> {
               ),
               Expanded(
                 child: Center(
-                  child: Text(
-                    step.shortLabel,
-                    textAlign: TextAlign.center,
-                    maxLines: 3,
-                    overflow: TextOverflow.ellipsis,
-                    style: TextStyle(
-                      fontSize: 12,
-                      height: 1.2,
-                      color: step.enabled ? _text : _muted,
-                    ),
+                  child: Column(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      Text(
+                        glyph,
+                        textAlign: TextAlign.center,
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: TextStyle(
+                          fontSize: 22,
+                          fontWeight: FontWeight.w700,
+                          height: 1.1,
+                          color: step.enabled ? _text : _muted,
+                        ),
+                      ),
+                      if (detail.isNotEmpty)
+                        Text(
+                          detail,
+                          textAlign: TextAlign.center,
+                          maxLines: 2,
+                          overflow: TextOverflow.ellipsis,
+                          style: const TextStyle(fontSize: 11, color: _muted, height: 1.2),
+                        ),
+                    ],
                   ),
                 ),
               ),
