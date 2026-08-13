@@ -44,6 +44,24 @@ class MacroStep {
     }
   }
 
+  String get shortLabel {
+    switch (kind) {
+      case 0:
+        return '${vkName(code)}${down ? ' ↓' : ' ↑'}';
+      case 1:
+        final btn = ['L', 'R', 'M', 'X1', 'X2'][code.clamp(0, 4)];
+        final pos = hasPos ? '\n$x,$y' : '';
+        return '${down ? '' : '↑ '}$btn$pos';
+      case 2:
+        return '${delayMs}ms';
+      case 3:
+        final t = text.length > 8 ? '${text.substring(0, 8)}…' : text;
+        return '"$t"';
+      default:
+        return '?';
+    }
+  }
+
   Map<String, dynamic> toJson() => {
         'kind': kind,
         'code': code,
@@ -104,11 +122,12 @@ class MacroDef {
   int state = 0;
 
   String get targetSummary {
-    if (!focusTarget) return 'Foreground (focused window)';
+    if (!focusTarget && process.isEmpty) return 'No window — plays into whatever is focused';
     final bits = <String>[];
     if (process.isNotEmpty) bits.add(process);
     if (title.isNotEmpty) bits.add('"$title"');
-    return bits.isEmpty ? 'Focus target (pick a window)' : bits.join(' · ');
+    final name = bits.isEmpty ? 'picked window' : bits.join(' · ');
+    return 'Sends to $name without stealing focus';
   }
 
   Map<String, dynamic> toJson() => {

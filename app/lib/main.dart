@@ -56,13 +56,15 @@ class _DashboardPageState extends State<DashboardPage> {
   final engine = NativeEngine.tryLoad();
   final macros = <MacroDef>[];
   MacroDef? selected;
-  MacroStep? selectedStep;
+  final selectedIndices = <int>{};
   bool keepDelays = true;
   bool recording = false;
+  bool nameHover = false;
   String status = 'Ready';
   String updateStatus = '';
   Timer? _poll;
   Timer? _stateTimer;
+  final sequenceFocus = FocusNode();
 
   @override
   void initState() {
@@ -76,6 +78,7 @@ class _DashboardPageState extends State<DashboardPage> {
   void dispose() {
     _poll?.cancel();
     _stateTimer?.cancel();
+    sequenceFocus.dispose();
     engine?.stopAll();
     super.dispose();
   }
@@ -159,7 +162,7 @@ class _DashboardPageState extends State<DashboardPage> {
       loopMode: m.timeLimit ? 2 : m.loopMode,
       repeatCount: m.repeatCount,
       durationMs: m.durationMs,
-      focusTarget: m.focusTarget,
+      focusTarget: m.focusTarget || m.process.isNotEmpty,
     );
     e.setTarget(m.nativeId, m.process, m.title);
     for (final step in m.steps.where((s) => s.enabled)) {
@@ -193,9 +196,23 @@ class _DashboardPageState extends State<DashboardPage> {
   void _insert(MacroStep step) {
     final m = selected;
     if (m == null) return;
-    final i = selectedStep == null ? m.steps.length : m.steps.indexOf(selectedStep!) + 1;
+    final i = selectedIndices.isEmpty ? m.steps.length : (selectedIndices.reduce((a, b) => a > b ? a : b) + 1);
     m.steps.insert(i.clamp(0, m.steps.length), step);
-    selectedStep = step;
+    selectedIndices
+      ..clear()
+      ..add(i.clamp(0, m.steps.length - 1));
+    _save();
+    setState(() {});
+  }
+
+  void _deleteSelected() {
+    final m = selected;
+    if (m == null || selectedIndices.isEmpty) return;
+    final order = selectedIndices.toList()..sort((a, b) => b.compareTo(a));
+    for (final i in order) {
+      if (i >= 0 && i < m.steps.length) m.steps.removeAt(i);
+    }
+    selectedIndices.clear();
     _save();
     setState(() {});
   }
@@ -232,7 +249,7 @@ class _DashboardPageState extends State<DashboardPage> {
     final e = engine;
     final m = selected;
     if (e == null || m == null) return;
-    setState(() => status = 'Click a window in 2 seconds…');
+    setState(() => status = 'Hover the target app, then click it (2s)…');
     await Future<void>.delayed(const Duration(seconds: 2));
     final info = e.windowAtCursor();
     if (info == null) return;
@@ -241,7 +258,7 @@ class _DashboardPageState extends State<DashboardPage> {
       ..title = info.title
       ..focusTarget = true;
     _save();
-    setState(() => status = 'Target: ${info.process} — ${info.title}');
+    setState(() => status = 'Target ${info.process} — input goes there without focusing it');
   }
 
   @override
@@ -250,6 +267,7 @@ class _DashboardPageState extends State<DashboardPage> {
     return Shortcuts(
       shortcuts: const {
         SingleActivator(LogicalKeyboardKey.keyK, control: true): _AddIntent(),
+        SingleActivator(LogicalKeyboardKey.delete): _DeleteIntent(),
       },
       child: Actions(
         actions: {
@@ -257,22 +275,29 @@ class _DashboardPageState extends State<DashboardPage> {
             _showInsertMenu(context);
             return null;
           }),
+          _DeleteIntent: CallbackAction<_DeleteIntent>(onInvoke: (_) {
+            _deleteSelected();
+            return null;
+          }),
         },
-        child: Scaffold(
-          body: Column(
-            children: [
-              _topBar(),
-              Expanded(
-                child: Row(
-                  children: [
-                    _sidebar(),
-                    Container(width: 1, color: _line),
-                    Expanded(child: m == null ? _empty() : _editor(m)),
-                  ],
+        child: Focus(
+          autofocus: true,
+          child: Scaffold(
+            body: Column(
+              children: [
+                _topBar(),
+                Expanded(
+                  child: Row(
+                    children: [
+                      _sidebar(),
+                      Container(width: 1, color: _line),
+                      Expanded(child: m == null ? _empty() : _editor(m)),
+                    ],
+                  ),
                 ),
-              ),
-              _statusBar(),
-            ],
+                _statusBar(),
+              ],
+            ),
           ),
         ),
       ),
@@ -362,7 +387,8 @@ class _DashboardPageState extends State<DashboardPage> {
                   return InkWell(
                     onTap: () => setState(() {
                       selected = m;
-                      selectedStep = null;
+                      selectedIndices.clear();
+                      nameHover = false;
                     }),
                     child: Container(
                       margin: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
@@ -422,17 +448,42 @@ class _DashboardPageState extends State<DashboardPage> {
           Row(
             children: [
               Expanded(
-                child: InkWell(
-                  onTap: () async {
-                    final v = await _prompt('Macro name', m.name);
-                    if (v != null && v.trim().isNotEmpty) {
-                      m.name = v.trim();
-                      _save();
-                      setState(() {});
-                    }
-                  },
-                  child: Text(m.name,
-                      style: const TextStyle(fontSize: 22, fontWeight: FontWeight.w600)),
+                child: MouseRegion(
+                  onEnter: (_) => setState(() => nameHover = true),
+                  onExit: (_) => setState(() => nameHover = false),
+                  cursor: SystemMouseCursors.click,
+                  child: InkWell(
+                    onTap: () async {
+                      final v = await _prompt('Macro name', m.name);
+                      if (v != null && v.trim().isNotEmpty) {
+                        m.name = v.trim();
+                        _save();
+                        setState(() {});
+                      }
+                    },
+                    borderRadius: BorderRadius.circular(10),
+                    hoverColor: _accent.withValues(alpha: 0.12),
+                    child: AnimatedContainer(
+                      duration: const Duration(milliseconds: 120),
+                      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+                      decoration: BoxDecoration(
+                        color: nameHover ? _accentDim : Colors.transparent,
+                        borderRadius: BorderRadius.circular(10),
+                        border: Border.all(color: nameHover ? _accent : Colors.transparent),
+                      ),
+                      child: Row(
+                        children: [
+                          Flexible(
+                            child: Text(m.name,
+                                overflow: TextOverflow.ellipsis,
+                                style: const TextStyle(fontSize: 22, fontWeight: FontWeight.w600)),
+                          ),
+                          const SizedBox(width: 8),
+                          Icon(Icons.edit_outlined, size: 18, color: nameHover ? _accent : _muted),
+                        ],
+                      ),
+                    ),
+                  ),
                 ),
               ),
               FilledButton(onPressed: () => _play(m), child: const Text('Start')),
@@ -544,11 +595,6 @@ class _DashboardPageState extends State<DashboardPage> {
                 Wrap(
                   spacing: 8,
                   children: [
-                    _ghost(m.focusTarget ? 'Focus target' : 'Foreground', () {
-                      m.focusTarget = !m.focusTarget;
-                      _save();
-                      setState(() {});
-                    }),
                     _ghost('Pick window', _pickWindow),
                     _ghost('Clear', () {
                       m
@@ -562,9 +608,8 @@ class _DashboardPageState extends State<DashboardPage> {
                 ),
                 const SizedBox(height: 8),
                 const Text(
-                  'Focus target activates the window, then sends hardware-style SendInput. '
-                  'Games using DirectInput/Raw Input still need that window focused — '
-                  'MacroRelay does not inject into other processes or install input drivers.',
+                  'Picked windows receive posted key/click messages and stay in the background. '
+                  'You can keep using other apps. Some games ignore this (DirectInput / Raw Input).',
                   style: TextStyle(color: _muted, fontSize: 12, height: 1.4),
                 ),
               ],
@@ -574,59 +619,43 @@ class _DashboardPageState extends State<DashboardPage> {
           Row(
             children: [
               const Text('Sequence', style: TextStyle(fontWeight: FontWeight.w600, fontSize: 16)),
+              const SizedBox(width: 12),
+              if (selectedIndices.isNotEmpty)
+                Text('${selectedIndices.length} selected', style: const TextStyle(color: _muted, fontSize: 12)),
               const Spacer(),
               _ghost('Insert step', () => _showInsertMenu(context)),
-              _ghost('Delete', () {
-                if (selectedStep == null) return;
-                m.steps.remove(selectedStep);
-                selectedStep = null;
-                _save();
+              _ghost('Select all', () {
+                selectedIndices
+                  ..clear()
+                  ..addAll(List.generate(m.steps.length, (i) => i));
                 setState(() {});
-              }, color: _danger),
+              }),
+              _ghost('Delete', _deleteSelected, color: _danger),
             ],
           ),
-          const SizedBox(height: 8),
-          ...m.steps.asMap().entries.map((e) {
-            final step = e.value;
-            final on = selectedStep == step;
-            return GestureDetector(
-              onTap: () => setState(() => selectedStep = step),
-              onSecondaryTapDown: (d) => _showInsertMenu(context, offset: d.globalPosition, replace: step),
-              child: AnimatedContainer(
-                duration: const Duration(milliseconds: 120),
-                margin: const EdgeInsets.only(bottom: 6),
-                padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
-                decoration: BoxDecoration(
-                  color: on ? _accentDim : _card,
-                  borderRadius: BorderRadius.circular(8),
-                  border: Border.all(color: on ? _accent : _line),
-                ),
-                child: Row(
-                  children: [
-                    Checkbox(
-                      value: step.enabled,
-                      activeColor: _accent,
-                      onChanged: (v) {
-                        step.enabled = v ?? true;
-                        _save();
-                        setState(() {});
-                      },
-                    ),
-                    Text('${e.key + 1}'.padLeft(2, '0'),
-                        style: const TextStyle(color: _muted, fontFeatures: [FontFeature.tabularFigures()])),
-                    const SizedBox(width: 12),
-                    Expanded(child: Text(step.label)),
-                  ],
-                ),
-              ),
-            );
-          }),
+          const SizedBox(height: 12),
           if (m.steps.isEmpty)
             const Padding(
-              padding: EdgeInsets.only(top: 24),
+              padding: EdgeInsets.only(top: 8),
               child: Text(
-                'Right-click here to insert a key, click, or text step.\nRecord to capture down/up only — mouse travel is ignored.',
+                'Right-click or Insert step. Record captures key/button down-up only.\n'
+                'Click squares to multi-select, then Delete.',
                 style: TextStyle(color: _muted, height: 1.5),
+              ),
+            )
+          else
+            Focus(
+              focusNode: sequenceFocus,
+              child: Wrap(
+                crossAxisAlignment: WrapCrossAlignment.center,
+                spacing: 4,
+                runSpacing: 10,
+                children: [
+                  for (var i = 0; i < m.steps.length; i++) ...[
+                    if (i > 0) const Icon(Icons.arrow_forward, color: _muted, size: 18),
+                    _stepSquare(m, i),
+                  ],
+                ],
               ),
             ),
         ],
@@ -697,7 +726,7 @@ class _DashboardPageState extends State<DashboardPage> {
     );
   }
 
-  Future<void> _showInsertMenu(BuildContext context, {Offset? offset, MacroStep? replace}) async {
+  Future<void> _showInsertMenu(BuildContext context, {Offset? offset}) async {
     final pos = offset ?? const Offset(400, 300);
     final choice = await showMenu<String>(
       context: context,
@@ -727,16 +756,18 @@ class _DashboardPageState extends State<DashboardPage> {
           return;
         }
       case 'click':
-        final xy = await _prompt('Client X,Y (example 120,80)', '0,0');
-        final parts = xy?.split(',');
-        if (parts != null && parts.length == 2) {
-          final x = int.tryParse(parts[0].trim());
-          final y = int.tryParse(parts[1].trim());
-          if (x != null && y != null) {
-            _insert(MacroStep(kind: 1, code: 0, down: true, x: x, y: y));
-            _insert(MacroStep(kind: 1, code: 0, down: false, x: x, y: y));
-            return;
+        final cap = await _promptClickXy();
+        if (cap != null) {
+          final macro = selected;
+          if (macro != null && cap.process.isNotEmpty) {
+            macro
+              ..process = cap.process
+              ..title = cap.title
+              ..focusTarget = true;
           }
+          _insert(MacroStep(kind: 1, code: 0, down: true, x: cap.x, y: cap.y));
+          _insert(MacroStep(kind: 1, code: 0, down: false, x: cap.x, y: cap.y));
+          return;
         }
       case 'lclick':
         _insert(MacroStep(kind: 1, code: 0, down: true));
@@ -752,6 +783,66 @@ class _DashboardPageState extends State<DashboardPage> {
         if (ms != null) step = MacroStep(kind: 2, delayMs: ms);
     }
     if (step != null) _insert(step);
+  }
+
+  Widget _stepSquare(MacroDef m, int i) {
+    final step = m.steps[i];
+    final on = selectedIndices.contains(i);
+    return Tooltip(
+      message: '${step.label}\nClick to select · right-click to insert',
+      child: GestureDetector(
+        onTap: () => setState(() {
+          sequenceFocus.requestFocus();
+          if (selectedIndices.contains(i)) {
+            selectedIndices.remove(i);
+          } else {
+            selectedIndices.add(i);
+          }
+        }),
+        onSecondaryTapDown: (d) => _showInsertMenu(context, offset: d.globalPosition),
+        child: AnimatedContainer(
+          duration: const Duration(milliseconds: 120),
+          width: 96,
+          height: 96,
+          padding: const EdgeInsets.all(8),
+          decoration: BoxDecoration(
+            color: on ? _accentDim : _card,
+            borderRadius: BorderRadius.circular(10),
+            border: Border.all(color: on ? _accent : _line, width: on ? 2 : 1),
+          ),
+          child: Column(
+            children: [
+              Text(
+                '${i + 1}'.padLeft(2, '0'),
+                style: const TextStyle(color: _muted, fontSize: 11, fontFeatures: [FontFeature.tabularFigures()]),
+              ),
+              Expanded(
+                child: Center(
+                  child: Text(
+                    step.shortLabel,
+                    textAlign: TextAlign.center,
+                    maxLines: 3,
+                    overflow: TextOverflow.ellipsis,
+                    style: TextStyle(
+                      fontSize: 12,
+                      height: 1.2,
+                      color: step.enabled ? _text : _muted,
+                    ),
+                  ),
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  Future<_CapturedClick?> _promptClickXy() async {
+    return showDialog<_CapturedClick>(
+      context: context,
+      builder: (ctx) => _ClickXyDialog(engine: engine),
+    );
   }
 
   Future<String?> _prompt(String title, String initial) async {
@@ -773,4 +864,162 @@ class _DashboardPageState extends State<DashboardPage> {
 
 class _AddIntent extends Intent {
   const _AddIntent();
+}
+
+class _DeleteIntent extends Intent {
+  const _DeleteIntent();
+}
+
+class _CapturedClick {
+  const _CapturedClick(this.x, this.y, {this.process = '', this.title = ''});
+  final int x;
+  final int y;
+  final String process;
+  final String title;
+}
+
+class _ClickXyDialog extends StatefulWidget {
+  const _ClickXyDialog({this.engine});
+  final NativeEngine? engine;
+
+  @override
+  State<_ClickXyDialog> createState() => _ClickXyDialogState();
+}
+
+class _ClickXyDialogState extends State<_ClickXyDialog> {
+  late final TextEditingController _ctrl;
+  Timer? _poll;
+  bool capturing = false;
+  bool armed = false;
+  String hint = '';
+
+  @override
+  void initState() {
+    super.initState();
+    _ctrl = TextEditingController(text: '0,0');
+  }
+
+  @override
+  void dispose() {
+    _poll?.cancel();
+    _ctrl.dispose();
+    super.dispose();
+  }
+
+  void _startCapture() {
+    if (widget.engine == null) {
+      setState(() => hint = 'Native engine is offline.');
+      return;
+    }
+    _poll?.cancel();
+    setState(() {
+      capturing = true;
+      armed = false;
+      hint = 'Hover the app, then press Control+Shift.';
+    });
+    _poll = Timer.periodic(const Duration(milliseconds: 16), (_) {
+      final e = widget.engine;
+      if (e == null || !capturing) return;
+      final down = e.ctrlShiftDown();
+      if (!down) {
+        armed = true;
+        return;
+      }
+      if (!armed) return;
+      final win = e.windowAtCursor();
+      if (win != null && win.process.toLowerCase() == 'macrorelay') {
+        return;
+      }
+      _poll?.cancel();
+      capturing = false;
+      final pos = e.cursorClient();
+      if (pos == null || !mounted) {
+        setState(() {
+          capturing = false;
+          hint = 'Could not read that window. Try again.';
+        });
+        return;
+      }
+      Navigator.pop(
+        context,
+        _CapturedClick(pos.x, pos.y, process: win?.process ?? '', title: win?.title ?? ''),
+      );
+    });
+  }
+
+  _CapturedClick? _fromTyped() {
+    final parts = _ctrl.text.split(',');
+    if (parts.length != 2) return null;
+    final x = int.tryParse(parts[0].trim());
+    final y = int.tryParse(parts[1].trim());
+    if (x == null || y == null) return null;
+    return _CapturedClick(x, y);
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return AlertDialog(
+      backgroundColor: _card,
+      title: const Text('Click at X,Y'),
+      content: SizedBox(
+        width: 360,
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            const Text('Type client coordinates', style: TextStyle(color: _muted, fontSize: 12)),
+            TextField(
+              controller: _ctrl,
+              autofocus: true,
+              decoration: const InputDecoration(hintText: '120,80'),
+            ),
+            const SizedBox(height: 16),
+            InkWell(
+              onTap: capturing ? null : _startCapture,
+              borderRadius: BorderRadius.circular(10),
+              child: AnimatedContainer(
+                duration: const Duration(milliseconds: 120),
+                padding: const EdgeInsets.all(12),
+                decoration: BoxDecoration(
+                  color: capturing ? _accentDim : _panel,
+                  borderRadius: BorderRadius.circular(10),
+                  border: Border.all(color: capturing ? _accent : _line),
+                ),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    const Row(
+                      children: [
+                        Icon(Icons.ads_click, size: 18, color: _accent),
+                        SizedBox(width: 8),
+                        Text('Capture with Control+Shift', style: TextStyle(fontWeight: FontWeight.w600)),
+                      ],
+                    ),
+                    const SizedBox(height: 6),
+                    Text(
+                      capturing
+                          ? (hint.isEmpty ? 'Hover the app, then press Control+Shift.' : hint)
+                          : 'Click here, move to the target window, hover the spot, then press Control+Shift. '
+                              'Saves X,Y relative to that app.',
+                      style: const TextStyle(color: _muted, fontSize: 12, height: 1.4),
+                    ),
+                  ],
+                ),
+              ),
+            ),
+          ],
+        ),
+      ),
+      actions: [
+        TextButton(onPressed: () => Navigator.pop(context), child: const Text('Cancel')),
+        FilledButton(
+          onPressed: () {
+            final v = _fromTyped();
+            if (v != null) Navigator.pop(context, v);
+          },
+          child: const Text('Insert'),
+        ),
+      ],
+    );
+  }
 }

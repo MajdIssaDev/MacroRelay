@@ -349,6 +349,53 @@ void ActivateWindow(HWND hwnd) {
   if (fgTid != thisTid) AttachThreadInput(thisTid, fgTid, FALSE);
 }
 
+void PostKey(HWND hwnd, WORD vk, bool up) {
+  const UINT msg = up ? WM_KEYUP : WM_KEYDOWN;
+  const UINT scan = MapVirtualKeyW(vk, MAPVK_VK_TO_VSC);
+  LPARAM lp = 1 | (static_cast<LPARAM>(scan) << 16);
+  if (up) lp |= (1L << 30) | (1L << 31);
+  if (IsExtended(vk)) lp |= (1L << 24);
+  PostMessageW(hwnd, msg, vk, lp);
+}
+
+void PostMouse(HWND hwnd, int button, bool down, int x, int y) {
+  UINT msg = WM_LBUTTONDOWN;
+  WPARAM wp = 0;
+  switch (button) {
+    case MR_MOUSE_LEFT:
+      msg = down ? WM_LBUTTONDOWN : WM_LBUTTONUP;
+      if (down) wp = MK_LBUTTON;
+      break;
+    case MR_MOUSE_RIGHT:
+      msg = down ? WM_RBUTTONDOWN : WM_RBUTTONUP;
+      if (down) wp = MK_RBUTTON;
+      break;
+    case MR_MOUSE_MIDDLE:
+      msg = down ? WM_MBUTTONDOWN : WM_MBUTTONUP;
+      if (down) wp = MK_MBUTTON;
+      break;
+    case MR_MOUSE_X1:
+      msg = down ? WM_XBUTTONDOWN : WM_XBUTTONUP;
+      wp = MAKEWPARAM(down ? MK_XBUTTON1 : 0, XBUTTON1);
+      break;
+    case MR_MOUSE_X2:
+      msg = down ? WM_XBUTTONDOWN : WM_XBUTTONUP;
+      wp = MAKEWPARAM(down ? MK_XBUTTON2 : 0, XBUTTON2);
+      break;
+    default:
+      break;
+  }
+  const LPARAM lp = MAKELPARAM(x, y);
+  PostMessageW(hwnd, WM_MOUSEMOVE, 0, lp);
+  PostMessageW(hwnd, msg, wp, lp);
+}
+
+void PostText(HWND hwnd, const std::wstring& text) {
+  for (wchar_t ch : text) {
+    PostMessageW(hwnd, WM_CHAR, static_cast<WPARAM>(ch), 1);
+  }
+}
+
 int ScaleDelay(const Session& s, int ms, std::mt19937& rng) {
   double speed = s.speed <= 0 ? 1.0 : s.speed;
   double value = ms / speed;
@@ -362,10 +409,39 @@ int ScaleDelay(const Session& s, int ms, std::mt19937& rng) {
 }
 
 void PlayStep(Session& s, const Step& step) {
-  if (s.focus_mode == MR_FOCUS_TARGET) {
-    HWND hwnd = FindTarget(s.process, s.title);
-    if (hwnd && GetForegroundWindow() != hwnd) ActivateWindow(hwnd);
+  HWND hwnd = FindTarget(s.process, s.title);
+  const bool background = s.focus_mode == MR_FOCUS_BACKGROUND && hwnd != nullptr;
+
+  if (s.focus_mode == MR_FOCUS_TARGET && hwnd && GetForegroundWindow() != hwnd) {
+    ActivateWindow(hwnd);
   }
+
+  if (background) {
+    int cx = step.x;
+    int cy = step.y;
+    if (!step.has_pos) {
+      POINT pt{};
+      GetCursorPos(&pt);
+      ScreenToClient(hwnd, &pt);
+      cx = pt.x;
+      cy = pt.y;
+    }
+    switch (step.kind) {
+      case MR_KIND_KEY:
+        PostKey(hwnd, static_cast<WORD>(step.code), step.down == 0);
+        break;
+      case MR_KIND_MOUSE:
+        PostMouse(hwnd, step.code, step.down != 0, cx, cy);
+        break;
+      case MR_KIND_TEXT:
+        PostText(hwnd, step.text);
+        break;
+      default:
+        break;
+    }
+    return;
+  }
+
   switch (step.kind) {
     case MR_KIND_KEY:
       if (step.down) {
@@ -653,6 +729,8 @@ int32_t mr_window_at_cursor(char* process, int32_t process_len, char* title, int
   GetCursorPos(&pt);
   HWND hwnd = WindowFromPoint(pt);
   if (!hwnd) return 0;
+  HWND root = GetAncestor(hwnd, GA_ROOT);
+  if (root) hwnd = root;
   DWORD process_id = 0;
   GetWindowThreadProcessId(hwnd, &process_id);
   if (pid) *pid = static_cast<int32_t>(process_id);
@@ -681,6 +759,31 @@ int32_t mr_window_at_cursor(char* process, int32_t process_len, char* title, int
     std::snprintf(title, static_cast<size_t>(title_len), "%s", t.c_str());
   }
   return 1;
+}
+
+int32_t mr_cursor_client(const char* process_utf8, const char* title_utf8, int32_t* x, int32_t* y) {
+  POINT pt;
+  GetCursorPos(&pt);
+  HWND hwnd = nullptr;
+  if ((process_utf8 && *process_utf8) || (title_utf8 && *title_utf8)) {
+    hwnd = FindTarget(process_utf8 ? process_utf8 : "", title_utf8 ? title_utf8 : "");
+  }
+  if (!hwnd) {
+    hwnd = WindowFromPoint(pt);
+    if (hwnd) {
+      HWND root = GetAncestor(hwnd, GA_ROOT);
+      if (root) hwnd = root;
+    }
+  }
+  if (!hwnd) return 0;
+  ScreenToClient(hwnd, &pt);
+  if (x) *x = pt.x;
+  if (y) *y = pt.y;
+  return 1;
+}
+
+int32_t mr_ctrl_shift_down(void) {
+  return (GetAsyncKeyState(VK_CONTROL) & 0x8000) && (GetAsyncKeyState(VK_SHIFT) & 0x8000) ? 1 : 0;
 }
 
 }  // extern "C"

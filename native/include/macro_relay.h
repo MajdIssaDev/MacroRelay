@@ -43,7 +43,8 @@ enum MrLoopMode {
 
 enum MrFocusMode {
   MR_FOCUS_NONE = 0,
-  MR_FOCUS_TARGET = 1
+  MR_FOCUS_TARGET = 1,
+  MR_FOCUS_BACKGROUND = 2
 };
 
 typedef struct MrEvent {
@@ -85,6 +86,9 @@ MR_API int32_t mr_running_count(void);
 
 MR_API int32_t mr_window_at_cursor(char* process, int32_t process_len, char* title,
                                    int32_t title_len, int32_t* pid);
+MR_API int32_t mr_cursor_client(const char* process_utf8, const char* title_utf8,
+                                int32_t* x, int32_t* y);
+MR_API int32_t mr_ctrl_shift_down(void);
 
 #ifdef __cplusplus
 }

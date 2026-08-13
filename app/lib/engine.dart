@@ -54,6 +54,10 @@ typedef _WindowC = Int32 Function(
     Pointer<Utf8>, Int32, Pointer<Utf8>, Int32, Pointer<Int32>);
 typedef _WindowD = int Function(
     Pointer<Utf8>, int, Pointer<Utf8>, int, Pointer<Int32>);
+typedef _CursorC = Int32 Function(Pointer<Utf8>, Pointer<Utf8>, Pointer<Int32>, Pointer<Int32>);
+typedef _CursorD = int Function(Pointer<Utf8>, Pointer<Utf8>, Pointer<Int32>, Pointer<Int32>);
+typedef _FlagC = Int32 Function();
+typedef _FlagD = int Function();
 
 class RecordedNative {
   RecordedNative(this.kind, this.code, this.down, this.delayMs);
@@ -83,7 +87,9 @@ class NativeEngine {
         _stopAll = lib.lookupFunction<_VoidC, _VoidD>('mr_stop_all'),
         _state = lib.lookupFunction<_StateC, _StateD>('mr_session_state'),
         _running = lib.lookupFunction<_CountC, _CountD>('mr_running_count'),
-        _window = lib.lookupFunction<_WindowC, _WindowD>('mr_window_at_cursor');
+        _window = lib.lookupFunction<_WindowC, _WindowD>('mr_window_at_cursor'),
+        _cursor = lib.lookupFunction<_CursorC, _CursorD>('mr_cursor_client'),
+        _ctrlShift = lib.lookupFunction<_FlagC, _FlagD>('mr_ctrl_shift_down');
 
   final _RecordStartD _recordStart;
   final _VoidD _recordStop;
@@ -104,6 +110,8 @@ class NativeEngine {
   final _StateD _state;
   final _CountD _running;
   final _WindowD _window;
+  final _CursorD _cursor;
+  final _FlagD _ctrlShift;
 
   static NativeEngine? tryLoad() {
     try {
@@ -146,7 +154,7 @@ class NativeEngine {
     required bool focusTarget,
   }) {
     _options(id, intervalMs, speed, jitter ? 1 : 0, loopMode, repeatCount,
-        durationMs, focusTarget ? 1 : 0);
+        durationMs, focusTarget ? 2 : 0);
   }
 
   void setTarget(int id, String process, String title) {
@@ -187,4 +195,20 @@ class NativeEngine {
     calloc.free(pid);
     return result;
   }
+
+  ({int x, int y})? cursorClient({String process = '', String title = ''}) {
+    final p = process.toNativeUtf8();
+    final t = title.toNativeUtf8();
+    final x = calloc<Int32>();
+    final y = calloc<Int32>();
+    final ok = _cursor(p, t, x, y);
+    final result = ok == 0 ? null : (x: x.value, y: y.value);
+    malloc.free(p);
+    malloc.free(t);
+    calloc.free(x);
+    calloc.free(y);
+    return result;
+  }
+
+  bool ctrlShiftDown() => _ctrlShift() != 0;
 }
