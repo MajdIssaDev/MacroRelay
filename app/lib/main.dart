@@ -126,10 +126,7 @@ class _DashboardPageState extends State<DashboardPage> {
           ..addAll(parseLibrary(await file.readAsString()));
       }
     } catch (_) {}
-    if (macros.isEmpty) {
-      macros.add(MacroDef(name: 'Macro 1'));
-    }
-    selected = macros.first;
+    selected = macros.isEmpty ? null : macros.first;
     nameCtrl.text = selected?.name ?? '';
     setState(() {});
   }
@@ -367,6 +364,25 @@ class _DashboardPageState extends State<DashboardPage> {
     setState(() {});
   }
 
+  void _deleteMacro(MacroDef m) {
+    if (recording && selected?.id == m.id) _toggleRecord();
+    if (m.nativeId != 0) {
+      engine?.stop(m.nativeId);
+      engine?.destroy(m.nativeId);
+    }
+    macros.removeWhere((e) => e.id == m.id);
+    if (selected?.id == m.id) {
+      selected = macros.isEmpty ? null : macros.first;
+      selectedIndices.clear();
+      selectionAnchor = null;
+      editingName = false;
+      nameHover = false;
+      nameCtrl.text = selected?.name ?? '';
+    }
+    _save();
+    setState(() {});
+  }
+
   void _deleteSelected() {
     final m = selected;
     if (m == null || selectedIndices.isEmpty) return;
@@ -530,6 +546,11 @@ class _DashboardPageState extends State<DashboardPage> {
                       final m = MacroDef(name: 'Macro ${macros.length + 1}');
                       macros.add(m);
                       selected = m;
+                      selectedIndices.clear();
+                      selectionAnchor = null;
+                      nameHover = false;
+                      editingName = false;
+                      nameCtrl.text = m.name;
                       _save();
                       setState(() {});
                     },
@@ -588,6 +609,12 @@ class _DashboardPageState extends State<DashboardPage> {
                                 ),
                               ],
                             ),
+                          ),
+                          IconButton(
+                            tooltip: 'Delete macro',
+                            visualDensity: VisualDensity.compact,
+                            onPressed: () => _deleteMacro(m),
+                            icon: Icon(Icons.delete_outline, color: c.danger, size: 20),
                           ),
                         ],
                       ),
@@ -855,7 +882,13 @@ class _DashboardPageState extends State<DashboardPage> {
     );
   }
 
-  Widget _empty() => Center(child: Text('Add a macro to begin', style: TextStyle(color: c.muted)));
+  Widget _empty() => Center(
+        child: Text(
+          'You have no macros, click + to add a macro',
+          textAlign: TextAlign.center,
+          style: TextStyle(color: c.muted, fontSize: 16, height: 1.5),
+        ),
+      );
 
   Widget _ghost(String label, VoidCallback onTap, {Color? color}) {
     return TextButton(
