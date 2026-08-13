@@ -89,6 +89,8 @@ MR_API int32_t mr_window_at_cursor(char* process, int32_t process_len, char* tit
 MR_API int32_t mr_cursor_client(const char* process_utf8, const char* title_utf8,
                                 int32_t* x, int32_t* y);
 MR_API int32_t mr_ctrl_shift_down(void);
+MR_API int32_t mr_hotkey_poll(int32_t* play_toggle, int32_t* record_toggle);
+MR_API int32_t mr_window_command(int32_t cmd);
 
 #ifdef __cplusplus
 }

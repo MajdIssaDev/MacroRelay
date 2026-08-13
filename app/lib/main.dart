@@ -1,47 +1,53 @@
 import 'dart:async';
-import 'dart:io';
+import 'dart:math' as math;
 
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
+import 'chrome.dart';
 import 'engine.dart';
+import 'menus.dart';
 import 'models.dart';
+import 'theme.dart';
+import 'tutorial.dart';
 import 'updater.dart';
-
-const _bg = Color(0xFF070A0D);
-const _panel = Color(0xFF10161D);
-const _card = Color(0xFF161E27);
-const _line = Color(0xFF243040);
-const _accent = Color(0xFF3DDC97);
-const _accentDim = Color(0xFF1B3D30);
-const _text = Color(0xFFE8EEF4);
-const _muted = Color(0xFF8A9AAB);
-const _danger = Color(0xFFFF5C7A);
 
 void main() {
   WidgetsFlutterBinding.ensureInitialized();
   runApp(const MacroRelayApp());
 }
 
-class MacroRelayApp extends StatelessWidget {
+class MacroRelayApp extends StatefulWidget {
   const MacroRelayApp({super.key});
+  @override
+  State<MacroRelayApp> createState() => _MacroRelayAppState();
+}
+
+class _MacroRelayAppState extends State<MacroRelayApp> {
+  final themes = ThemeController();
+
+  @override
+  void dispose() {
+    themes.dispose();
+    super.dispose();
+  }
 
   @override
   Widget build(BuildContext context) {
-    return MaterialApp(
-      title: 'MacroRelay',
-      debugShowCheckedModeBanner: false,
-      theme: ThemeData(
-        brightness: Brightness.dark,
-        useMaterial3: true,
-        scaffoldBackgroundColor: _bg,
-        colorScheme: const ColorScheme.dark(
-          primary: _accent,
-          surface: _panel,
-        ),
-        fontFamily: 'Segoe UI',
+    return AppTheme(
+      controller: themes,
+      child: AnimatedBuilder(
+        animation: themes,
+        builder: (context, _) {
+          final p = themes.palette;
+          return MaterialApp(
+            title: 'MacroRelay',
+            debugShowCheckedModeBanner: false,
+            theme: themeFrom(p),
+            home: const DashboardPage(),
+          );
+        },
       ),
-      home: const DashboardPage(),
     );
   }
 }
@@ -57,20 +63,46 @@ class _DashboardPageState extends State<DashboardPage> {
   final macros = <MacroDef>[];
   MacroDef? selected;
   final selectedIndices = <int>{};
+  int? selectionAnchor;
+  int? insertCursor;
+  int? recordInsertAt;
+  bool _reordering = false;
   bool keepDelays = true;
   bool recording = false;
   bool nameHover = false;
   String status = 'Ready';
   String updateStatus = '';
+  bool _updating = false;
   Timer? _poll;
   Timer? _stateTimer;
   final sequenceFocus = FocusNode();
+  final nameFocus = FocusNode();
+  late final TextEditingController nameCtrl;
+  bool editingName = false;
+  final headerKey = GlobalKey();
+  final recordKey = GlobalKey();
+  final themeKey = GlobalKey();
+  final infoKey = GlobalKey();
+  final nameKey = GlobalKey();
+  final startKey = GlobalKey();
+  final targetKey = GlobalKey();
+  final sequenceKey = GlobalKey();
+  final insertKey = GlobalKey();
+
+  Palette get c => AppTheme.of(context);
 
   @override
   void initState() {
     super.initState();
+    nameCtrl = TextEditingController();
+    nameFocus.addListener(() {
+      if (!nameFocus.hasFocus && editingName) _commitName();
+    });
     _load();
-    _stateTimer = Timer.periodic(const Duration(milliseconds: 250), (_) => _refreshStates());
+    _stateTimer = Timer.periodic(const Duration(milliseconds: 50), (_) {
+      _pollHotkeys();
+      _refreshStates();
+    });
     _checkUpdates(silent: true);
   }
 
@@ -79,6 +111,8 @@ class _DashboardPageState extends State<DashboardPage> {
     _poll?.cancel();
     _stateTimer?.cancel();
     sequenceFocus.dispose();
+    nameFocus.dispose();
+    nameCtrl.dispose();
     engine?.stopAll();
     super.dispose();
   }
@@ -96,12 +130,72 @@ class _DashboardPageState extends State<DashboardPage> {
       macros.add(MacroDef(name: 'Macro 1'));
     }
     selected = macros.first;
+    nameCtrl.text = selected?.name ?? '';
     setState(() {});
   }
 
   Future<void> _save() async {
     final file = await libraryFile();
     await file.writeAsString(libraryJson(macros));
+  }
+
+  void _commitName() {
+    final m = selected;
+    editingName = false;
+    if (m == null) return;
+    final v = nameCtrl.text.trim();
+    if (v.isNotEmpty && v != m.name) {
+      m.name = v;
+      _save();
+    } else {
+      nameCtrl.text = m.name;
+    }
+    setState(() {});
+  }
+
+  void _startTutorial() {
+    showTutorial(context, [
+      TutorialStep(
+        title: 'Welcome to MacroRelay',
+        body: 'Record keys and clicks, then play them into a picked window without stealing focus. Use Previous / Next to walk through the controls.',
+        anchor: headerKey,
+      ),
+      TutorialStep(
+        title: 'Themes',
+        body: 'Tap a color dot to switch palettes. Ops, Cobalt, Ember, Orchid, and Frost are saved for next launch.',
+        anchor: themeKey,
+      ),
+      TutorialStep(
+        title: 'Record',
+        body: 'F9 starts and stops recording. Mouse travel is ignored. Clicks on MacroRelay itself are not captured — use F9 so Stop rec does not add an extra click.',
+        anchor: recordKey,
+      ),
+      TutorialStep(
+        title: 'Macro name',
+        body: 'Click the name to edit it in place. No popup. Keep it short; this box stays on the left of Start.',
+        anchor: nameKey,
+      ),
+      TutorialStep(
+        title: 'Play',
+        body: 'F6 starts or stops the selected macro. Start all / Pause all / Stop all control every enabled macro.',
+        anchor: startKey,
+      ),
+      TutorialStep(
+        title: 'Window target',
+        body: 'Pick window sends posted keys and clicks to that app without focusing it. DirectInput games may still ignore posted messages.',
+        anchor: targetKey,
+      ),
+      TutorialStep(
+        title: 'Sequence',
+        body: 'Click a square to select it. Ctrl+click adds more, Shift+click selects the range. Hold a square to drag the selection. Right-click an arrow or the + slot to insert or record there.',
+        anchor: sequenceKey,
+      ),
+      TutorialStep(
+        title: 'Insert step',
+        body: 'Menus open at the button. Capture click X,Y with Control+Shift over the target app. That click does not move your cursor.',
+        anchor: insertKey,
+      ),
+    ]);
   }
 
   void _refreshStates() {
@@ -120,32 +214,33 @@ class _DashboardPageState extends State<DashboardPage> {
   }
 
   Future<void> _checkUpdates({bool silent = false}) async {
-    setState(() => updateStatus = 'Checking updates…');
+    if (_updating) return;
+    _updating = true;
+    if (!silent) setState(() => updateStatus = 'Checking updates…');
     try {
-      final info = await Updater.check();
-      if (info == null) {
-        setState(() => updateStatus = silent ? '' : 'Up to date (${Updater.current})');
-        return;
-      }
-      setState(() => updateStatus = 'Update ${info.latest} available');
-      if (!mounted) return;
-      final go = await showDialog<bool>(
-        context: context,
-        builder: (ctx) => AlertDialog(
-          backgroundColor: _card,
-          title: Text('MacroRelay ${info.latest}'),
-          content: Text('A new version is on GitHub Releases.\n\n${info.body}'),
-          actions: [
-            TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('Later')),
-            FilledButton(onPressed: () => Navigator.pop(ctx, true), child: const Text('Open release')),
-          ],
-        ),
+      final result = await Updater.checkAndApply(
+        onStatus: (s) {
+          if (mounted) setState(() => updateStatus = s);
+        },
+        onBeforeApply: () async {
+          engine?.stopAll();
+        },
+        apply: true,
+        allowSetupInstall: !silent,
       );
-      if (go == true) {
-        await Process.run('cmd', ['/c', 'start', '', info.url]);
+      if (!mounted) return;
+      switch (result.kind) {
+        case UpdateKind.upToDate:
+          setState(() => updateStatus = silent ? '' : result.message);
+        case UpdateKind.skipped:
+          setState(() => updateStatus = silent ? '' : result.message);
+        case UpdateKind.failed:
+          setState(() => updateStatus = silent ? '' : result.message);
       }
-    } catch (err) {
-      setState(() => updateStatus = silent ? '' : 'Update check failed');
+    } catch (_) {
+      if (mounted) setState(() => updateStatus = silent ? '' : 'Update check failed');
+    } finally {
+      _updating = false;
     }
   }
 
@@ -194,14 +289,80 @@ class _DashboardPageState extends State<DashboardPage> {
     setState(() => status = 'Playing ${m.name}');
   }
 
+  void _togglePlay() {
+    final m = selected;
+    if (m == null || recording) return;
+    final running = m.nativeId != 0 && (engine?.state(m.nativeId) ?? m.state) != 0;
+    if (running) {
+      engine?.stop(m.nativeId);
+      setState(() => status = 'Stopped');
+      return;
+    }
+    _play(m);
+  }
+
+  void _pollHotkeys() {
+    final e = engine;
+    if (e == null) return;
+    final keys = e.pollHotkeys();
+    if (keys.record) _toggleRecord();
+    if (keys.play) _togglePlay();
+  }
+
   void _insert(MacroStep step) {
     final m = selected;
     if (m == null) return;
-    final i = selectedIndices.isEmpty ? m.steps.length : (selectedIndices.reduce((a, b) => a > b ? a : b) + 1);
-    m.steps.insert(i.clamp(0, m.steps.length), step);
+    final i = insertCursor ??
+        (selectedIndices.isEmpty ? m.steps.length : (selectedIndices.reduce(math.max) + 1));
+    final at = i.clamp(0, m.steps.length);
+    m.steps.insert(at, step);
+    if (insertCursor != null) insertCursor = at + 1;
     selectedIndices
       ..clear()
-      ..add(i.clamp(0, m.steps.length - 1));
+      ..add(at);
+    selectionAnchor = at;
+    _save();
+    setState(() {});
+  }
+
+  void _selectIndex(int i, {required bool ctrl, required bool shift}) {
+    sequenceFocus.requestFocus();
+    if (shift && selectionAnchor != null) {
+      final from = math.min(selectionAnchor!, i);
+      final to = math.max(selectionAnchor!, i);
+      selectedIndices
+        ..clear()
+        ..addAll([for (var k = from; k <= to; k++) k]);
+    } else if (ctrl) {
+      if (!selectedIndices.remove(i)) selectedIndices.add(i);
+      selectionAnchor = i;
+    } else {
+      selectedIndices
+        ..clear()
+        ..add(i);
+      selectionAnchor = i;
+    }
+    setState(() {});
+  }
+
+  void _moveSelectedTo(int dest) {
+    final m = selected;
+    if (m == null || selectedIndices.isEmpty) return;
+    final order = selectedIndices.toList()..sort();
+    final contiguous = order.last - order.first + 1 == order.length;
+    if (contiguous && dest >= order.first && dest <= order.last + 1) return;
+    final moving = [for (final i in order) m.steps[i]];
+    var insertAt = dest;
+    for (final i in order.reversed) {
+      m.steps.removeAt(i);
+      if (i < insertAt) insertAt--;
+    }
+    insertAt = insertAt.clamp(0, m.steps.length);
+    m.steps.insertAll(insertAt, moving);
+    selectedIndices
+      ..clear()
+      ..addAll([for (var k = 0; k < moving.length; k++) insertAt + k]);
+    selectionAnchor = insertAt;
     _save();
     setState(() {});
   }
@@ -214,36 +375,58 @@ class _DashboardPageState extends State<DashboardPage> {
       if (i >= 0 && i < m.steps.length) m.steps.removeAt(i);
     }
     selectedIndices.clear();
+    selectionAnchor = null;
     _save();
     setState(() {});
   }
 
-  void _toggleRecord() {
+  void _toggleRecord({int? insertAt}) {
     final e = engine;
     final m = selected;
     if (e == null || m == null) return;
     if (recording) {
       e.recordStop();
       _poll?.cancel();
+      _ingestRecorded(m);
       recording = false;
+      recordInsertAt = null;
       status = 'Recording stopped';
       _save();
       setState(() {});
       return;
     }
+    recordInsertAt = insertAt;
     e.recordStart(keepDelays: keepDelays);
     recording = true;
-    status = keepDelays ? 'Recording (delays on)' : 'Recording (delays off)';
+    final where = insertAt == null ? '' : ' · insert at ${(insertAt + 1).toString().padLeft(2, '0')}';
+    final prefix = keepDelays ? 'Recording (delays on)' : 'Recording (delays off)';
+    status = '$prefix$where  F9 stop';
     _poll = Timer.periodic(const Duration(milliseconds: 16), (_) {
-      for (final ev in e.pollRecorded()) {
-        if (ev.delayMs > 0 && keepDelays) {
-          m.steps.add(MacroStep(kind: 2, delayMs: ev.delayMs));
-        }
-        m.steps.add(MacroStep(kind: ev.kind, code: ev.code, down: ev.down == 1));
-      }
+      _ingestRecorded(m);
       setState(() {});
     });
     setState(() {});
+  }
+
+  void _ingestRecorded(MacroDef m) {
+    final e = engine;
+    if (e == null) return;
+    for (final ev in e.pollRecorded()) {
+      void put(MacroStep step) {
+        final at = recordInsertAt;
+        if (at == null) {
+          m.steps.add(step);
+        } else {
+          m.steps.insert(at.clamp(0, m.steps.length), step);
+          recordInsertAt = at + 1;
+        }
+      }
+
+      if (ev.delayMs > 0 && keepDelays) {
+        put(MacroStep(kind: 2, delayMs: ev.delayMs));
+      }
+      put(MacroStep(kind: ev.kind, code: ev.code, down: ev.down == 1));
+    }
   }
 
   Future<void> _pickWindow() async {
@@ -286,12 +469,35 @@ class _DashboardPageState extends State<DashboardPage> {
           child: Scaffold(
             body: Column(
               children: [
-                _topBar(),
+                AppHeader(
+                  engine: engine,
+                  recording: recording,
+                  onRecord: () => _toggleRecord(),
+                  onStartAll: () {
+                    for (final m in macros.where((e) => e.enabled)) {
+                      _play(m);
+                    }
+                  },
+                  onPauseAll: () {
+                    for (final m in macros) {
+                      if (m.nativeId != 0) engine?.pause(m.nativeId);
+                    }
+                  },
+                  onStopAll: () {
+                    engine?.stopAll();
+                    setState(() => status = 'Stopped');
+                  },
+                  onInfo: _startTutorial,
+                  headerKey: headerKey,
+                  recordKey: recordKey,
+                  themeKey: themeKey,
+                  infoKey: infoKey,
+                ),
                 Expanded(
                   child: Row(
                     children: [
                       _sidebar(),
-                      Container(width: 1, color: _line),
+                      Container(width: 1, color: c.line),
                       Expanded(child: m == null ? _empty() : _editor(m)),
                     ],
                   ),
@@ -305,58 +511,11 @@ class _DashboardPageState extends State<DashboardPage> {
     );
   }
 
-  Widget _topBar() {
-    return Container(
-      height: 56,
-      padding: const EdgeInsets.symmetric(horizontal: 16),
-      decoration: const BoxDecoration(
-        color: _panel,
-        border: Border(bottom: BorderSide(color: _line)),
-      ),
-      child: Row(
-        children: [
-          Container(
-            width: 10,
-            height: 10,
-            decoration: const BoxDecoration(color: _accent, shape: BoxShape.circle),
-          ),
-          const SizedBox(width: 10),
-          const Text('MACRORELAY',
-              style: TextStyle(letterSpacing: 3, fontWeight: FontWeight.w700, fontSize: 13)),
-          const Spacer(),
-          _ghost('Start all', () {
-            for (final m in macros.where((e) => e.enabled)) {
-              _play(m);
-            }
-          }),
-          _ghost('Pause all', () {
-            for (final m in macros) {
-              if (m.nativeId != 0) engine?.pause(m.nativeId);
-            }
-          }),
-          _ghost('Stop all', () {
-            engine?.stopAll();
-            setState(() => status = 'Stopped');
-          }, color: _danger),
-          const SizedBox(width: 8),
-          FilledButton(
-            onPressed: _toggleRecord,
-            style: FilledButton.styleFrom(
-              backgroundColor: recording ? _danger : _accent,
-              foregroundColor: Colors.black,
-            ),
-            child: Text(recording ? 'Stop rec' : 'Record'),
-          ),
-        ],
-      ),
-    );
-  }
-
   Widget _sidebar() {
     return SizedBox(
       width: 280,
       child: ColoredBox(
-        color: _panel,
+        color: c.panel,
         child: Column(
           children: [
             Padding(
@@ -374,7 +533,7 @@ class _DashboardPageState extends State<DashboardPage> {
                       _save();
                       setState(() {});
                     },
-                    icon: const Icon(Icons.add, color: _accent),
+                    icon: Icon(Icons.add, color: c.accent),
                   ),
                 ],
               ),
@@ -389,21 +548,24 @@ class _DashboardPageState extends State<DashboardPage> {
                     onTap: () => setState(() {
                       selected = m;
                       selectedIndices.clear();
+                      selectionAnchor = null;
                       nameHover = false;
+                      editingName = false;
+                      nameCtrl.text = m.name;
                     }),
                     child: Container(
                       margin: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
                       padding: const EdgeInsets.all(12),
                       decoration: BoxDecoration(
-                        color: on ? _accentDim : _card,
+                        color: on ? c.accentDim : c.card,
                         borderRadius: BorderRadius.circular(10),
-                        border: Border.all(color: on ? _accent : _line),
+                        border: Border.all(color: on ? c.accent : c.line),
                       ),
                       child: Row(
                         children: [
                           Switch(
                             value: m.enabled,
-                            activeThumbColor: _accent,
+                            activeThumbColor: c.accent,
                             onChanged: (v) {
                               m.enabled = v;
                               _save();
@@ -422,7 +584,7 @@ class _DashboardPageState extends State<DashboardPage> {
                                       : m.state == 2
                                           ? 'Paused'
                                           : 'Stopped',
-                                  style: const TextStyle(color: _muted, fontSize: 11),
+                                  style: TextStyle(color: c.muted, fontSize: 11),
                                 ),
                               ],
                             ),
@@ -442,52 +604,74 @@ class _DashboardPageState extends State<DashboardPage> {
 
   Widget _editor(MacroDef m) {
     return ColoredBox(
-      color: _bg,
+      color: c.bg,
       child: ListView(
         padding: const EdgeInsets.all(20),
         children: [
           Row(
             children: [
-              Expanded(
-                child: MouseRegion(
-                  onEnter: (_) => setState(() => nameHover = true),
-                  onExit: (_) => setState(() => nameHover = false),
-                  cursor: SystemMouseCursors.click,
-                  child: InkWell(
-                    onTap: () async {
-                      final v = await _prompt('Macro name', m.name);
-                      if (v != null && v.trim().isNotEmpty) {
-                        m.name = v.trim();
-                        _save();
-                        setState(() {});
-                      }
-                    },
-                    borderRadius: BorderRadius.circular(10),
-                    hoverColor: _accent.withValues(alpha: 0.12),
+              KeyedSubtree(
+                key: nameKey,
+                child: ConstrainedBox(
+                  constraints: const BoxConstraints(maxWidth: 240),
+                  child: MouseRegion(
+                    onEnter: (_) => setState(() => nameHover = true),
+                    onExit: (_) => setState(() => nameHover = false),
+                    cursor: SystemMouseCursors.text,
                     child: AnimatedContainer(
                       duration: const Duration(milliseconds: 120),
-                      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+                      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
                       decoration: BoxDecoration(
-                        color: nameHover ? _accentDim : Colors.transparent,
-                        borderRadius: BorderRadius.circular(10),
-                        border: Border.all(color: nameHover ? _accent : Colors.transparent),
+                        color: (nameHover || editingName) ? c.accentDim : c.card,
+                        borderRadius: BorderRadius.circular(12),
+                        border: Border.all(color: (nameHover || editingName) ? c.accent : c.line),
                       ),
                       child: Row(
                         children: [
-                          Flexible(
-                            child: Text(m.name,
-                                overflow: TextOverflow.ellipsis,
-                                style: const TextStyle(fontSize: 22, fontWeight: FontWeight.w600)),
+                          Expanded(
+                            child: editingName
+                                ? TextField(
+                                    controller: nameCtrl,
+                                    focusNode: nameFocus,
+                                    autofocus: true,
+                                    style: const TextStyle(fontSize: 18, fontWeight: FontWeight.w600),
+                                    decoration: const InputDecoration(
+                                      isDense: true,
+                                      border: InputBorder.none,
+                                      contentPadding: EdgeInsets.zero,
+                                    ),
+                                    onSubmitted: (_) => _commitName(),
+                                  )
+                                : GestureDetector(
+                                    onTap: () {
+                                      setState(() => editingName = true);
+                                      nameCtrl.text = m.name;
+                                      nameCtrl.selection = TextSelection(baseOffset: 0, extentOffset: nameCtrl.text.length);
+                                      WidgetsBinding.instance.addPostFrameCallback((_) => nameFocus.requestFocus());
+                                    },
+                                    child: Text(
+                                      m.name,
+                                      overflow: TextOverflow.ellipsis,
+                                      style: const TextStyle(fontSize: 18, fontWeight: FontWeight.w600),
+                                    ),
+                                  ),
                           ),
-                          const SizedBox(width: 8),
-                          Icon(Icons.edit_outlined, size: 18, color: nameHover ? _accent : _muted),
+                          const SizedBox(width: 6),
+                          Icon(Icons.edit_outlined, size: 16, color: (nameHover || editingName) ? c.accent : c.muted),
                         ],
                       ),
                     ),
                   ),
                 ),
               ),
-              FilledButton(onPressed: () => _play(m), child: const Text('Start')),
+              const SizedBox(width: 16),
+              KeyedSubtree(
+                key: startKey,
+                child: FilledButton(
+                  onPressed: _togglePlay,
+                  child: Text((m.state == 1 || m.state == 2) ? 'Stop (F6)' : 'Start (F6)'),
+                ),
+              ),
               const SizedBox(width: 8),
               _ghost('Pause', () {
                 if (m.nativeId != 0) engine?.pause(m.nativeId);
@@ -495,7 +679,7 @@ class _DashboardPageState extends State<DashboardPage> {
               _ghost('Stop', () {
                 if (m.nativeId != 0) engine?.stop(m.nativeId);
                 setState(() => status = 'Stopped');
-              }, color: _danger),
+              }, color: c.danger),
             ],
           ),
           const SizedBox(height: 12),
@@ -503,25 +687,24 @@ class _DashboardPageState extends State<DashboardPage> {
             spacing: 16,
             runSpacing: 12,
             children: [
-              _chipField(
-                'Repeat',
-                DropdownButtonHideUnderline(
-                  child: DropdownButton<int>(
-                    value: m.loopMode,
-                    dropdownColor: _card,
-                    items: const [
-                      DropdownMenuItem(value: 0, child: Text('Infinite')),
-                      DropdownMenuItem(value: 1, child: Text('Count')),
-                      DropdownMenuItem(value: 2, child: Text('Time limit')),
-                    ],
-                    onChanged: (v) {
-                      m.loopMode = v ?? 0;
-                      m.timeLimit = m.loopMode == 2;
-                      _save();
-                      setState(() {});
-                    },
-                  ),
-                ),
+              _menuChip(
+                label: 'Repeat',
+                value: m.loopMode == 1
+                    ? 'Count'
+                    : m.loopMode == 2
+                        ? 'Time limit'
+                        : 'Infinite',
+                items: const [
+                  MenuChoice(0, 'Infinite'),
+                  MenuChoice(1, 'Count'),
+                  MenuChoice(2, 'Time limit'),
+                ],
+                onPicked: (int v) {
+                  m.loopMode = v;
+                  m.timeLimit = v == 2;
+                  _save();
+                  setState(() {});
+                },
               ),
               if (m.loopMode == 1)
                 _numField('Count', m.repeatCount, (v) {
@@ -538,32 +721,27 @@ class _DashboardPageState extends State<DashboardPage> {
                 m.intervalMs = v;
                 _save();
               }),
-              _chipField(
-                'Speed',
-                DropdownButtonHideUnderline(
-                  child: DropdownButton<double>(
-                    value: const [0.5, 1.0, 1.5, 2.0, 3.0].contains(m.speed) ? m.speed : 1.0,
-                    dropdownColor: _card,
-                    items: const [
-                      DropdownMenuItem(value: 0.5, child: Text('0.5x')),
-                      DropdownMenuItem(value: 1.0, child: Text('1x')),
-                      DropdownMenuItem(value: 1.5, child: Text('1.5x')),
-                      DropdownMenuItem(value: 2.0, child: Text('2x')),
-                      DropdownMenuItem(value: 3.0, child: Text('3x')),
-                    ],
-                    onChanged: (v) {
-                      m.speed = v ?? 1;
-                      _save();
-                      setState(() {});
-                    },
-                  ),
-                ),
+              _menuChip(
+                label: 'Speed',
+                value: '${m.speed}x',
+                items: const [
+                  MenuChoice(0.5, '0.5x'),
+                  MenuChoice(1.0, '1x'),
+                  MenuChoice(1.5, '1.5x'),
+                  MenuChoice(2.0, '2x'),
+                  MenuChoice(3.0, '3x'),
+                ],
+                onPicked: (double v) {
+                  m.speed = v;
+                  _save();
+                  setState(() {});
+                },
               ),
               FilterChip(
                 label: const Text('Humanized jitter'),
                 selected: m.jitter,
-                selectedColor: _accentDim,
-                checkmarkColor: _accent,
+                selectedColor: c.accentDim,
+                checkmarkColor: c.accent,
                 onSelected: (v) {
                   m.jitter = v;
                   _save();
@@ -573,26 +751,27 @@ class _DashboardPageState extends State<DashboardPage> {
               FilterChip(
                 label: const Text('Keep delays'),
                 selected: keepDelays,
-                selectedColor: _accentDim,
-                checkmarkColor: _accent,
+                selectedColor: c.accentDim,
+                checkmarkColor: c.accent,
                 onSelected: (v) => setState(() => keepDelays = v),
               ),
             ],
           ),
           const SizedBox(height: 16),
           Container(
+            key: targetKey,
             padding: const EdgeInsets.all(14),
             decoration: BoxDecoration(
-              color: _card,
+              color: c.card,
               borderRadius: BorderRadius.circular(12),
-              border: Border.all(color: _line),
+              border: Border.all(color: c.line),
             ),
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
                 const Text('Window target', style: TextStyle(fontWeight: FontWeight.w600)),
                 const SizedBox(height: 6),
-                Text(m.targetSummary, style: const TextStyle(color: _muted)),
+                Text(m.targetSummary, style: TextStyle(color: c.muted)),
                 const SizedBox(height: 10),
                 Wrap(
                   spacing: 8,
@@ -609,57 +788,44 @@ class _DashboardPageState extends State<DashboardPage> {
                   ],
                 ),
                 const SizedBox(height: 8),
-                const Text(
+                Text(
                   'Picked windows receive posted key/click messages and stay in the background. '
                   'You can keep using other apps. Some games ignore this (DirectInput / Raw Input).',
-                  style: TextStyle(color: _muted, fontSize: 12, height: 1.4),
+                  style: TextStyle(color: c.muted, fontSize: 12, height: 1.4),
                 ),
               ],
             ),
           ),
           const SizedBox(height: 16),
           Row(
+            key: sequenceKey,
             children: [
               const Text('Sequence', style: TextStyle(fontWeight: FontWeight.w600, fontSize: 16)),
               const SizedBox(width: 12),
               if (selectedIndices.isNotEmpty)
-                Text('${selectedIndices.length} selected', style: const TextStyle(color: _muted, fontSize: 12)),
+                Text('${selectedIndices.length} selected', style: TextStyle(color: c.muted, fontSize: 12)),
               const Spacer(),
-              _ghost('Insert step', () => _showInsertMenu(context)),
+              KeyedSubtree(
+                key: insertKey,
+                child: Builder(
+                  builder: (ctx) => TextButton(
+                    onPressed: () => _showInsertMenu(ctx, offset: buttonMenuOrigin(ctx)),
+                    child: Text('Insert step', style: TextStyle(color: c.text)),
+                  ),
+                ),
+              ),
               _ghost('Select all', () {
                 selectedIndices
                   ..clear()
                   ..addAll(List.generate(m.steps.length, (i) => i));
+                selectionAnchor = m.steps.isEmpty ? null : 0;
                 setState(() {});
               }),
-              _ghost('Delete', _deleteSelected, color: _danger),
+              _ghost('Delete', _deleteSelected, color: c.danger),
             ],
           ),
           const SizedBox(height: 12),
-          if (m.steps.isEmpty)
-            const Padding(
-              padding: EdgeInsets.only(top: 8),
-              child: Text(
-                'Right-click or Insert step. Record captures key/button down-up only.\n'
-                'Click squares to multi-select, then Delete.',
-                style: TextStyle(color: _muted, height: 1.5),
-              ),
-            )
-          else
-            Focus(
-              focusNode: sequenceFocus,
-              child: Wrap(
-                crossAxisAlignment: WrapCrossAlignment.center,
-                spacing: 4,
-                runSpacing: 10,
-                children: [
-                  for (var i = 0; i < m.steps.length; i++) ...[
-                    if (i > 0) const Icon(Icons.arrow_forward, color: _muted, size: 18),
-                    _stepSquare(m, i),
-                  ],
-                ],
-              ),
-            ),
+          _sequenceBoard(m),
         ],
       ),
     );
@@ -669,44 +835,32 @@ class _DashboardPageState extends State<DashboardPage> {
     return Container(
       height: 32,
       padding: const EdgeInsets.symmetric(horizontal: 16),
-      color: _panel,
+      color: c.panel,
       child: Row(
         children: [
-          Text(status, style: const TextStyle(color: _muted, fontSize: 12)),
+          Text(status, style: TextStyle(color: c.muted, fontSize: 12)),
           const Spacer(),
           TextButton(
-            onPressed: () => _checkUpdates(),
+            onPressed: _updating ? null : () => _checkUpdates(),
             child: Text(updateStatus.isEmpty ? 'Check for updates' : updateStatus,
-                style: const TextStyle(fontSize: 12, color: _accent)),
+                style: TextStyle(fontSize: 12, color: c.accent)),
           ),
           const SizedBox(width: 12),
           Text(engine == null ? 'engine offline' : 'native ${engine != null ? 'ready' : ''}',
-              style: TextStyle(color: engine == null ? _danger : _muted, fontSize: 12)),
+              style: TextStyle(color: engine == null ? c.danger : c.muted, fontSize: 12)),
           const SizedBox(width: 12),
-          const Text('v${Updater.current}', style: TextStyle(color: _muted, fontSize: 12)),
+          Text('v${Updater.current}', style: TextStyle(color: c.muted, fontSize: 12)),
         ],
       ),
     );
   }
 
-  Widget _empty() => const Center(child: Text('Add a macro to begin', style: TextStyle(color: _muted)));
+  Widget _empty() => Center(child: Text('Add a macro to begin', style: TextStyle(color: c.muted)));
 
-  Widget _ghost(String label, VoidCallback onTap, {Color color = _text}) {
+  Widget _ghost(String label, VoidCallback onTap, {Color? color}) {
     return TextButton(
       onPressed: onTap,
-      child: Text(label, style: TextStyle(color: color)),
-    );
-  }
-
-  Widget _chipField(String label, Widget child) {
-    return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
-      decoration: BoxDecoration(color: _card, borderRadius: BorderRadius.circular(10), border: Border.all(color: _line)),
-      child: Row(mainAxisSize: MainAxisSize.min, children: [
-        Text(label, style: const TextStyle(color: _muted, fontSize: 12)),
-        const SizedBox(width: 8),
-        child,
-      ]),
+      child: Text(label, style: TextStyle(color: color ?? c.text)),
     );
   }
 
@@ -718,9 +872,9 @@ class _DashboardPageState extends State<DashboardPage> {
         keyboardType: TextInputType.number,
         decoration: InputDecoration(
           labelText: label,
-          labelStyle: const TextStyle(color: _muted, fontSize: 12),
+          labelStyle: TextStyle(color: c.muted, fontSize: 12),
           filled: true,
-          fillColor: _card,
+          fillColor: c.card,
           border: OutlineInputBorder(borderRadius: BorderRadius.circular(10)),
         ),
         onSubmitted: (v) => onChanged(int.tryParse(v) ?? value),
@@ -728,131 +882,369 @@ class _DashboardPageState extends State<DashboardPage> {
     );
   }
 
-  Future<void> _showInsertMenu(BuildContext context, {Offset? offset}) async {
-    final pos = offset ?? const Offset(400, 300);
-    final choice = await showMenu<String>(
-      context: context,
-      color: _card,
-      position: RelativeRect.fromLTRB(pos.dx, pos.dy, pos.dx + 1, pos.dy + 1),
-      items: const [
-        PopupMenuItem(value: 'text', child: Text('Type ASCII / text…')),
-        PopupMenuItem(value: 'key', child: Text('Keyboard tap…')),
-        PopupMenuItem(value: 'click', child: Text('Mouse click at X,Y…')),
-        PopupMenuItem(value: 'lclick', child: Text('Left click (cursor)')),
-        PopupMenuItem(value: 'rclick', child: Text('Right click (cursor)')),
-        PopupMenuItem(value: 'delay', child: Text('Wait…')),
-      ],
+  Widget _menuChip<T>({
+    required String label,
+    required String value,
+    required List<MenuChoice<T>> items,
+    required ValueChanged<T> onPicked,
+  }) {
+    return Builder(
+      builder: (ctx) {
+        return InkWell(
+          onTap: () async {
+            final picked = await showAppMenu<T>(
+              context: ctx,
+              position: buttonMenuOrigin(ctx),
+              items: items,
+            );
+            if (picked != null) onPicked(picked);
+          },
+          borderRadius: BorderRadius.circular(12),
+          child: Container(
+            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+            decoration: BoxDecoration(
+              color: c.card,
+              borderRadius: BorderRadius.circular(12),
+              border: Border.all(color: c.line),
+            ),
+            child: Row(mainAxisSize: MainAxisSize.min, children: [
+              Text(label, style: TextStyle(color: c.muted, fontSize: 12)),
+              const SizedBox(width: 8),
+              Text(value, style: TextStyle(color: c.text, fontWeight: FontWeight.w600)),
+              const SizedBox(width: 4),
+              Icon(Icons.expand_more, size: 16, color: c.muted),
+            ]),
+          ),
+        );
+      },
     );
-    if (choice == null || !mounted) return;
-    MacroStep? step;
-    switch (choice) {
-      case 'text':
-        final t = await _prompt('Text to type', '');
-        if (t != null) step = MacroStep(kind: 3, text: t);
-      case 'key':
-        final t = await _prompt('Key (A, Enter, F6…)', 'A');
-        final vk = t == null ? null : vkFromName(t);
-        if (vk != null) {
-          _insert(MacroStep(kind: 0, code: vk, down: true));
-          _insert(MacroStep(kind: 0, code: vk, down: false));
-          return;
-        }
-      case 'click':
-        final cap = await _promptClickXy();
-        if (cap != null) {
-          final macro = selected;
-          if (macro != null && cap.process.isNotEmpty) {
-            macro
-              ..process = cap.process
-              ..title = cap.title
-              ..focusTarget = true;
-          }
-          _insert(MacroStep(kind: 1, code: 0, down: true, x: cap.x, y: cap.y));
-          _insert(MacroStep(kind: 1, code: 0, down: false, x: cap.x, y: cap.y));
-          return;
-        }
-      case 'lclick':
-        _insert(MacroStep(kind: 1, code: 0, down: true));
-        _insert(MacroStep(kind: 1, code: 0, down: false));
-        return;
-      case 'rclick':
-        _insert(MacroStep(kind: 1, code: 1, down: true));
-        _insert(MacroStep(kind: 1, code: 1, down: false));
-        return;
-      case 'delay':
-        final t = await _prompt('Milliseconds', '50');
-        final ms = int.tryParse(t ?? '');
-        if (ms != null) step = MacroStep(kind: 2, delayMs: ms);
-    }
-    if (step != null) _insert(step);
   }
 
-  Widget _stepSquare(MacroDef m, int i) {
+  Widget _sequenceBoard(MacroDef m) {
+    return Focus(
+      focusNode: sequenceFocus,
+      child: GestureDetector(
+        behavior: HitTestBehavior.opaque,
+        onTap: () {
+          if (_reordering) return;
+          sequenceFocus.requestFocus();
+          if (selectedIndices.isEmpty) return;
+          selectedIndices.clear();
+          selectionAnchor = null;
+          setState(() {});
+        },
+        child: Container(
+          width: double.infinity,
+          constraints: const BoxConstraints(minHeight: 120),
+          padding: const EdgeInsets.all(12),
+          decoration: BoxDecoration(
+            color: c.card,
+            borderRadius: BorderRadius.circular(12),
+            border: Border.all(color: c.line),
+          ),
+          child: m.steps.isEmpty
+              ? Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    _gapSlot(0, terminal: true),
+                    const SizedBox(height: 10),
+                    Text(
+                      'Right-click the + slot to insert or record here. Hold a square to drag.\n'
+                      'Ctrl+click adds to the selection, Shift+click selects the range between two squares.',
+                      style: TextStyle(color: c.muted, height: 1.5),
+                    ),
+                  ],
+                )
+              : Wrap(
+                  crossAxisAlignment: WrapCrossAlignment.center,
+                  spacing: 0,
+                  runSpacing: 10,
+                  children: [
+                    for (var i = 0; i < m.steps.length; i++) ...[
+                      _gapSlot(i),
+                      _stepSquare(m, i),
+                    ],
+                    _gapSlot(m.steps.length, terminal: true),
+                  ],
+                ),
+        ),
+      ),
+    );
+  }
+
+  Widget _gapSlot(int insertAt, {bool terminal = false}) {
+    return DragTarget<int>(
+      onWillAcceptWithDetails: (_) => !recording && selectedIndices.isNotEmpty,
+      onAcceptWithDetails: (_) => _moveSelectedTo(insertAt),
+      builder: (context, cand, _) {
+        final hot = cand.isNotEmpty;
+        if (terminal) {
+          return Tooltip(
+            message: 'Drop here · right-click to insert or record',
+            child: GestureDetector(
+              onSecondaryTapDown: (d) => _showGapMenu(d.globalPosition, insertAt),
+              child: AnimatedContainer(
+                duration: const Duration(milliseconds: 80),
+                width: 96,
+                height: 96,
+                decoration: BoxDecoration(
+                  color: hot ? c.accentDim : Colors.transparent,
+                  borderRadius: BorderRadius.circular(10),
+                  border: Border.all(color: hot ? c.accent : c.line),
+                ),
+                child: Icon(Icons.add, color: hot ? c.accent : c.muted),
+              ),
+            ),
+          );
+        }
+        return Tooltip(
+          message: 'Drop here · right-click to insert or record',
+          child: GestureDetector(
+            onSecondaryTapDown: (d) => _showGapMenu(d.globalPosition, insertAt),
+            child: AnimatedContainer(
+              duration: const Duration(milliseconds: 80),
+              width: hot ? 32 : 24,
+              height: 96,
+              alignment: Alignment.center,
+              decoration: BoxDecoration(
+                color: hot ? c.accentDim : Colors.transparent,
+                borderRadius: BorderRadius.circular(8),
+              ),
+              child: Icon(
+                insertAt == 0 ? Icons.chevron_right : Icons.arrow_forward,
+                color: hot ? c.accent : c.muted,
+                size: 18,
+              ),
+            ),
+          ),
+        );
+      },
+    );
+  }
+
+  Future<void> _showGapMenu(Offset pos, int at) async {
+    final choice = await showAppMenu<String>(
+      context: context,
+      position: pos,
+      items: const [
+        MenuChoice('insert', 'Insert step…'),
+        MenuChoice('record', 'Record here'),
+      ],
+    );
+    if (!mounted || choice == null) return;
+    if (choice == 'insert') {
+      insertCursor = at;
+      await _showInsertMenu(context, offset: pos);
+    } else if (choice == 'record') {
+      if (recording) {
+        _toggleRecord();
+      } else {
+        _toggleRecord(insertAt: at);
+      }
+    }
+  }
+
+  Future<void> _showInsertMenu(BuildContext context, {Offset? offset}) async {
+    try {
+      final pos = offset ??
+          Offset(MediaQuery.sizeOf(context).width * 0.45, MediaQuery.sizeOf(context).height * 0.28);
+      final choice = await showAppMenu<String>(
+        context: context,
+        position: pos,
+        items: const [
+          MenuChoice('text', 'Type ASCII / text…'),
+          MenuChoice('key', 'Keyboard tap…'),
+          MenuChoice('click', 'Mouse click at X,Y…'),
+          MenuChoice('lclick', 'Left click (cursor)'),
+          MenuChoice('rclick', 'Right click (cursor)'),
+          MenuChoice('delay', 'Wait…'),
+        ],
+      );
+      if (choice == null || !mounted) return;
+      MacroStep? step;
+      switch (choice) {
+        case 'text':
+          final t = await _prompt('Text to type', '');
+          if (t != null) step = MacroStep(kind: 3, text: t);
+        case 'key':
+          final t = await _prompt('Key (A, Enter, F6…)', 'A');
+          final vk = t == null ? null : vkFromName(t);
+          if (vk != null) {
+            _insert(MacroStep(kind: 0, code: vk, down: true));
+            _insert(MacroStep(kind: 0, code: vk, down: false));
+            return;
+          }
+        case 'click':
+          final cap = await _promptClickXy();
+          if (cap != null) {
+            final macro = selected;
+            if (macro != null && cap.process.isNotEmpty) {
+              macro
+                ..process = cap.process
+                ..title = cap.title
+                ..focusTarget = true;
+            }
+            _insert(MacroStep(kind: 1, code: 0, down: true, x: cap.x, y: cap.y));
+            _insert(MacroStep(kind: 1, code: 0, down: false, x: cap.x, y: cap.y));
+            return;
+          }
+        case 'lclick':
+          _insert(MacroStep(kind: 1, code: 0, down: true));
+          _insert(MacroStep(kind: 1, code: 0, down: false));
+          return;
+        case 'rclick':
+          _insert(MacroStep(kind: 1, code: 1, down: true));
+          _insert(MacroStep(kind: 1, code: 1, down: false));
+          return;
+        case 'delay':
+          final t = await _prompt('Milliseconds', '50');
+          final ms = int.tryParse(t ?? '');
+          if (ms != null) step = MacroStep(kind: 2, delayMs: ms);
+      }
+      if (step != null) _insert(step);
+    } finally {
+      insertCursor = null;
+    }
+  }
+
+  Widget _stepFace(MacroDef m, int i) {
     final step = m.steps[i];
     final on = selectedIndices.contains(i);
     final parts = step.shortLabel.split('\n');
     final glyph = parts.first;
     final detail = parts.length > 1 ? parts.sublist(1).join('\n') : '';
-    return Tooltip(
-      message: '${step.label}\nClick to select · right-click to insert',
-      child: GestureDetector(
-        onTap: () => setState(() {
-          sequenceFocus.requestFocus();
-          if (selectedIndices.contains(i)) {
-            selectedIndices.remove(i);
-          } else {
-            selectedIndices.add(i);
-          }
-        }),
-        onSecondaryTapDown: (d) => _showInsertMenu(context, offset: d.globalPosition),
-        child: AnimatedContainer(
-          duration: const Duration(milliseconds: 120),
+    return AnimatedContainer(
+      duration: const Duration(milliseconds: 120),
+      width: 96,
+      height: 96,
+      padding: const EdgeInsets.all(8),
+      decoration: BoxDecoration(
+        color: on ? c.accentDim : c.card,
+        borderRadius: BorderRadius.circular(10),
+        border: Border.all(color: on ? c.accent : c.line, width: on ? 2 : 1),
+      ),
+      child: Column(
+        children: [
+          Text(
+            '${i + 1}'.padLeft(2, '0'),
+            style: TextStyle(color: c.muted, fontSize: 11, fontFeatures: [FontFeature.tabularFigures()]),
+          ),
+          Expanded(
+            child: Center(
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Text(
+                    glyph,
+                    textAlign: TextAlign.center,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: TextStyle(
+                      fontSize: 22,
+                      fontWeight: FontWeight.w700,
+                      height: 1.1,
+                      color: step.enabled ? c.text : c.muted,
+                    ),
+                  ),
+                  if (detail.isNotEmpty)
+                    Text(
+                      detail,
+                      textAlign: TextAlign.center,
+                      maxLines: 2,
+                      overflow: TextOverflow.ellipsis,
+                      style: TextStyle(fontSize: 11, color: c.muted, height: 1.2),
+                    ),
+                ],
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _stepSquare(MacroDef m, int i) {
+    final count = selectedIndices.length;
+    return Draggable<int>(
+      data: i,
+      maxSimultaneousDrags: recording ? 0 : 1,
+      onDragStarted: () {
+        _reordering = true;
+        sequenceFocus.requestFocus();
+        if (!selectedIndices.contains(i)) {
+          selectedIndices
+            ..clear()
+            ..add(i);
+          selectionAnchor = i;
+          setState(() {});
+        }
+      },
+      onDragEnd: (_) {
+        WidgetsBinding.instance.addPostFrameCallback((_) {
+          if (mounted) _reordering = false;
+        });
+      },
+      feedback: Material(
+        color: Colors.transparent,
+        elevation: 8,
+        borderRadius: BorderRadius.circular(10),
+        child: SizedBox(
           width: 96,
           height: 96,
-          padding: const EdgeInsets.all(8),
-          decoration: BoxDecoration(
-            color: on ? _accentDim : _card,
-            borderRadius: BorderRadius.circular(10),
-            border: Border.all(color: on ? _accent : _line, width: on ? 2 : 1),
-          ),
-          child: Column(
+          child: Stack(
+            clipBehavior: Clip.none,
             children: [
-              Text(
-                '${i + 1}'.padLeft(2, '0'),
-                style: const TextStyle(color: _muted, fontSize: 11, fontFeatures: [FontFeature.tabularFigures()]),
-              ),
-              Expanded(
-                child: Center(
-                  child: Column(
-                    mainAxisSize: MainAxisSize.min,
-                    children: [
-                      Text(
-                        glyph,
-                        textAlign: TextAlign.center,
-                        maxLines: 1,
-                        overflow: TextOverflow.ellipsis,
-                        style: TextStyle(
-                          fontSize: 22,
-                          fontWeight: FontWeight.w700,
-                          height: 1.1,
-                          color: step.enabled ? _text : _muted,
-                        ),
+              _stepFace(m, i),
+              if (count > 1)
+                Positioned(
+                  right: -6,
+                  top: -6,
+                  child: Container(
+                    padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                    decoration: BoxDecoration(
+                      color: c.accent,
+                      borderRadius: BorderRadius.circular(10),
+                    ),
+                    child: Text(
+                      '$count',
+                      style: TextStyle(
+                        color: c.light ? Colors.white : c.bg,
+                        fontSize: 11,
+                        fontWeight: FontWeight.w700,
                       ),
-                      if (detail.isNotEmpty)
-                        Text(
-                          detail,
-                          textAlign: TextAlign.center,
-                          maxLines: 2,
-                          overflow: TextOverflow.ellipsis,
-                          style: const TextStyle(fontSize: 11, color: _muted, height: 1.2),
-                        ),
-                    ],
+                    ),
                   ),
                 ),
-              ),
             ],
           ),
         ),
+      ),
+      childWhenDragging: Opacity(opacity: 0.35, child: _stepFace(m, i)),
+      child: DragTarget<int>(
+        onWillAcceptWithDetails: (_) => !recording && selectedIndices.isNotEmpty,
+        onAcceptWithDetails: (_) => _moveSelectedTo(i),
+        builder: (context, cand, _) {
+          final hot = cand.isNotEmpty;
+          return Tooltip(
+            message: '${m.steps[i].label}\nClick to select · Ctrl/Shift · hold to drag',
+            child: GestureDetector(
+              onTap: () {
+                final keys = HardwareKeyboard.instance;
+                _selectIndex(i, ctrl: keys.isControlPressed, shift: keys.isShiftPressed);
+              },
+              onSecondaryTapDown: (d) => _showGapMenu(d.globalPosition, i + 1),
+              child: DecoratedBox(
+                decoration: BoxDecoration(
+                  borderRadius: BorderRadius.circular(10),
+                  boxShadow: [
+                    if (hot) BoxShadow(color: c.accent.withValues(alpha: 0.45), blurRadius: 10),
+                  ],
+                ),
+                child: _stepFace(m, i),
+              ),
+            ),
+          );
+        },
       ),
     );
   }
@@ -869,7 +1261,7 @@ class _DashboardPageState extends State<DashboardPage> {
     return showDialog<String>(
       context: context,
       builder: (ctx) => AlertDialog(
-        backgroundColor: _card,
+        backgroundColor: c.card,
         title: Text(title),
         content: TextField(controller: ctrl, autofocus: true),
         actions: [
@@ -911,6 +1303,7 @@ class _ClickXyDialogState extends State<_ClickXyDialog> {
   bool capturing = false;
   bool armed = false;
   String hint = '';
+  Palette get c => AppTheme.of(context);
 
   @override
   void initState() {
@@ -978,7 +1371,7 @@ class _ClickXyDialogState extends State<_ClickXyDialog> {
   @override
   Widget build(BuildContext context) {
     return AlertDialog(
-      backgroundColor: _card,
+      backgroundColor: c.card,
       title: const Text('Click at X,Y'),
       content: SizedBox(
         width: 360,
@@ -986,7 +1379,7 @@ class _ClickXyDialogState extends State<_ClickXyDialog> {
           mainAxisSize: MainAxisSize.min,
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
-            const Text('Type client coordinates', style: TextStyle(color: _muted, fontSize: 12)),
+            Text('Type client coordinates', style: TextStyle(color: c.muted, fontSize: 12)),
             TextField(
               controller: _ctrl,
               autofocus: true,
@@ -1000,18 +1393,18 @@ class _ClickXyDialogState extends State<_ClickXyDialog> {
                 duration: const Duration(milliseconds: 120),
                 padding: const EdgeInsets.all(12),
                 decoration: BoxDecoration(
-                  color: capturing ? _accentDim : _panel,
+                  color: capturing ? c.accentDim : c.panel,
                   borderRadius: BorderRadius.circular(10),
-                  border: Border.all(color: capturing ? _accent : _line),
+                  border: Border.all(color: capturing ? c.accent : c.line),
                 ),
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    const Row(
+                    Row(
                       children: [
-                        Icon(Icons.ads_click, size: 18, color: _accent),
-                        SizedBox(width: 8),
-                        Text('Capture with Control+Shift', style: TextStyle(fontWeight: FontWeight.w600)),
+                        Icon(Icons.ads_click, size: 18, color: c.accent),
+                        const SizedBox(width: 8),
+                        const Text('Capture with Control+Shift', style: TextStyle(fontWeight: FontWeight.w600)),
                       ],
                     ),
                     const SizedBox(height: 6),
@@ -1020,7 +1413,7 @@ class _ClickXyDialogState extends State<_ClickXyDialog> {
                           ? (hint.isEmpty ? 'Hover the app, then press Control+Shift.' : hint)
                           : 'Click here, move to the target window, hover the spot, then press Control+Shift. '
                               'Saves X,Y relative to that app.',
-                      style: const TextStyle(color: _muted, fontSize: 12, height: 1.4),
+                      style: TextStyle(color: c.muted, fontSize: 12, height: 1.4),
                     ),
                   ],
                 ),

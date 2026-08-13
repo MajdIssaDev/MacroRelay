@@ -58,6 +58,10 @@ typedef _CursorC = Int32 Function(Pointer<Utf8>, Pointer<Utf8>, Pointer<Int32>, 
 typedef _CursorD = int Function(Pointer<Utf8>, Pointer<Utf8>, Pointer<Int32>, Pointer<Int32>);
 typedef _FlagC = Int32 Function();
 typedef _FlagD = int Function();
+typedef _HotkeyC = Int32 Function(Pointer<Int32>, Pointer<Int32>);
+typedef _HotkeyD = int Function(Pointer<Int32>, Pointer<Int32>);
+typedef _WinCmdC = Int32 Function(Int32);
+typedef _WinCmdD = int Function(int);
 
 class RecordedNative {
   RecordedNative(this.kind, this.code, this.down, this.delayMs);
@@ -89,7 +93,9 @@ class NativeEngine {
         _running = lib.lookupFunction<_CountC, _CountD>('mr_running_count'),
         _window = lib.lookupFunction<_WindowC, _WindowD>('mr_window_at_cursor'),
         _cursor = lib.lookupFunction<_CursorC, _CursorD>('mr_cursor_client'),
-        _ctrlShift = lib.lookupFunction<_FlagC, _FlagD>('mr_ctrl_shift_down');
+        _ctrlShift = lib.lookupFunction<_FlagC, _FlagD>('mr_ctrl_shift_down'),
+        _hotkeys = lib.lookupFunction<_HotkeyC, _HotkeyD>('mr_hotkey_poll'),
+        _winCmd = lib.lookupFunction<_WinCmdC, _WinCmdD>('mr_window_command');
 
   final _RecordStartD _recordStart;
   final _VoidD _recordStop;
@@ -112,6 +118,8 @@ class NativeEngine {
   final _WindowD _window;
   final _CursorD _cursor;
   final _FlagD _ctrlShift;
+  final _HotkeyD _hotkeys;
+  final _WinCmdD _winCmd;
 
   static NativeEngine? tryLoad() {
     try {
@@ -211,4 +219,19 @@ class NativeEngine {
   }
 
   bool ctrlShiftDown() => _ctrlShift() != 0;
+
+  ({bool play, bool record}) pollHotkeys() {
+    final play = calloc<Int32>();
+    final rec = calloc<Int32>();
+    _hotkeys(play, rec);
+    final result = (play: play.value != 0, record: rec.value != 0);
+    calloc.free(play);
+    calloc.free(rec);
+    return result;
+  }
+
+  void windowDrag() => _winCmd(0);
+  void windowMinimize() => _winCmd(1);
+  void windowMaximizeToggle() => _winCmd(2);
+  void windowClose() => _winCmd(3);
 }

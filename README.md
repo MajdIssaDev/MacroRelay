@@ -59,7 +59,7 @@ Dark “ops” dashboard:
 - humanized jitter toggle
 - right-click (or Ctrl+K) to insert text, keys, or clicks at X,Y
 - Start / Pause / Stop / Record
-- **Check for updates** (GitHub Releases)
+- **Check for updates** (downloads and installs the latest GitHub Release automatically)
 
 ## Layout
 
@@ -71,7 +71,7 @@ src/        Legacy WPF app (same recording filter applied)
 
 ## Auto-update
 
-Installed copies can be packed with Velopack from the Flutter `Release` folder. The app also queries GitHub Releases on demand (and optionally on launch) and opens the latest release page.
+Installed copies (Setup.exe / Velopack) check GitHub Releases on launch. If a newer version exists, MacroRelay downloads the package and applies it with `Update.exe`, then restarts. **Check for updates** in the status bar does the same check on demand. Debug / unpackaged builds skip silent install; the button still downloads Setup.exe and runs it.
 
 ## Build installer
 

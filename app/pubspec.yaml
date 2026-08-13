@@ -1,7 +1,7 @@
 name: macro_relay
 description: MacroRelay — record and play Windows macros with a native C++ engine.
 publish_to: "none"
-version: 1.2.2+5
+version: 1.3.0+6
 
 environment:
   sdk: ^3.11.5

@@ -211,6 +211,18 @@ int ConsumeDelay() {
   return g_keep_delays ? delay : 0;
 }
 
+bool IsOwnWindowAt(POINT pt) {
+  HWND hwnd = WindowFromPoint(pt);
+  if (!hwnd) return false;
+  HWND root = GetAncestor(hwnd, GA_ROOT);
+  if (root) hwnd = root;
+  DWORD pid = 0;
+  GetWindowThreadProcessId(hwnd, &pid);
+  return pid == GetCurrentProcessId();
+}
+
+bool IsHotkeyVk(int vk) { return vk == VK_F6 || vk == VK_F9; }
+
 void PushEvent(int kind, int code, int down) {
   MrEvent e{};
   e.kind = kind;
@@ -227,7 +239,9 @@ LRESULT CALLBACK KeyboardProc(int code, WPARAM wParam, LPARAM lParam) {
     const auto* data = reinterpret_cast<KBDLLHOOKSTRUCT*>(lParam);
     const bool down = wParam == WM_KEYDOWN || wParam == WM_SYSKEYDOWN;
     const bool up = wParam == WM_KEYUP || wParam == WM_SYSKEYUP;
-    if (down || up) PushEvent(MR_KIND_KEY, static_cast<int>(data->vkCode), down ? 1 : 0);
+    if ((down || up) && !IsHotkeyVk(static_cast<int>(data->vkCode))) {
+      PushEvent(MR_KIND_KEY, static_cast<int>(data->vkCode), down ? 1 : 0);
+    }
   }
   return CallNextHookEx(g_kb, code, wParam, lParam);
 }
@@ -235,6 +249,9 @@ LRESULT CALLBACK KeyboardProc(int code, WPARAM wParam, LPARAM lParam) {
 LRESULT CALLBACK MouseProc(int code, WPARAM wParam, LPARAM lParam) {
   if (code >= 0) {
     const auto* data = reinterpret_cast<MSLLHOOKSTRUCT*>(lParam);
+    if (IsOwnWindowAt(data->pt)) {
+      return CallNextHookEx(g_mouse, code, wParam, lParam);
+    }
     int button = -1;
     int down = 0;
     switch (wParam) {
@@ -825,6 +842,57 @@ int32_t mr_cursor_client(const char* process_utf8, const char* title_utf8, int32
 
 int32_t mr_ctrl_shift_down(void) {
   return (GetAsyncKeyState(VK_CONTROL) & 0x8000) && (GetAsyncKeyState(VK_SHIFT) & 0x8000) ? 1 : 0;
+}
+
+int32_t mr_hotkey_poll(int32_t* play_toggle, int32_t* record_toggle) {
+  static bool primed = false;
+  static bool play_was = false;
+  static bool record_was = false;
+  const bool play_down = (GetAsyncKeyState(VK_F6) & 0x8000) != 0;
+  const bool record_down = (GetAsyncKeyState(VK_F9) & 0x8000) != 0;
+  if (!primed) {
+    play_was = play_down;
+    record_was = record_down;
+    primed = true;
+    if (play_toggle) *play_toggle = 0;
+    if (record_toggle) *record_toggle = 0;
+    return 0;
+  }
+  const int play = (play_down && !play_was) ? 1 : 0;
+  const int rec = (record_down && !record_was) ? 1 : 0;
+  play_was = play_down;
+  record_was = record_down;
+  if (play_toggle) *play_toggle = play;
+  if (record_toggle) *record_toggle = rec;
+  return play || rec;
+}
+
+int32_t mr_window_command(int32_t cmd) {
+  HWND hwnd = GetActiveWindow();
+  if (!hwnd) hwnd = GetForegroundWindow();
+  if (hwnd) {
+    HWND root = GetAncestor(hwnd, GA_ROOT);
+    if (root) hwnd = root;
+  }
+  if (!hwnd) return 0;
+  switch (cmd) {
+    case 0:
+      ReleaseCapture();
+      SendMessageW(hwnd, WM_NCLBUTTONDOWN, HTCAPTION, 0);
+      break;
+    case 1:
+      ShowWindow(hwnd, SW_MINIMIZE);
+      break;
+    case 2:
+      ShowWindow(hwnd, IsZoomed(hwnd) ? SW_RESTORE : SW_MAXIMIZE);
+      break;
+    case 3:
+      PostMessageW(hwnd, WM_CLOSE, 0, 0);
+      break;
+    default:
+      return 0;
+  }
+  return 1;
 }
 
 }  // extern "C"
