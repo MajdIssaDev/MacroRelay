@@ -2,6 +2,7 @@ bin/
 obj/
 publish/
 Releases/
+artifacts/
 .vs/
 *.user
 *.suo

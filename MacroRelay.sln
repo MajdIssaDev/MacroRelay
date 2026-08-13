@@ -1,0 +1,34 @@
+﻿
+Microsoft Visual Studio Solution File, Format Version 12.00
+# Visual Studio Version 17
+VisualStudioVersion = 17.0.31903.59
+MinimumVisualStudioVersion = 10.0.40219.1
+Project("{2150E333-8FDC-42A3-9474-1A3956D46DE8}") = "src", "src", "{A6F66FF3-67F0-4771-B746-E24B99D6DB53}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "MacroRelay.Core", "src\MacroRelay.Core\MacroRelay.Core.csproj", "{0288AD7A-15EB-4330-A94F-2624021717AE}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "MacroRelay.App", "src\MacroRelay.App\MacroRelay.App.csproj", "{273ED2FD-9DE9-463D-BE0C-87141CF3420F}"
+EndProject
+Global
+	GlobalSection(SolutionConfigurationPlatforms) = preSolution
+		Debug|Any CPU = Debug|Any CPU
+		Release|Any CPU = Release|Any CPU
+	EndGlobalSection
+	GlobalSection(SolutionProperties) = preSolution
+		HideSolutionNode = FALSE
+	EndGlobalSection
+	GlobalSection(ProjectConfigurationPlatforms) = postSolution
+		{0288AD7A-15EB-4330-A94F-2624021717AE}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{0288AD7A-15EB-4330-A94F-2624021717AE}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{0288AD7A-15EB-4330-A94F-2624021717AE}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{0288AD7A-15EB-4330-A94F-2624021717AE}.Release|Any CPU.Build.0 = Release|Any CPU
+		{273ED2FD-9DE9-463D-BE0C-87141CF3420F}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{273ED2FD-9DE9-463D-BE0C-87141CF3420F}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{273ED2FD-9DE9-463D-BE0C-87141CF3420F}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{273ED2FD-9DE9-463D-BE0C-87141CF3420F}.Release|Any CPU.Build.0 = Release|Any CPU
+	EndGlobalSection
+	GlobalSection(NestedProjects) = preSolution
+		{0288AD7A-15EB-4330-A94F-2624021717AE} = {A6F66FF3-67F0-4771-B746-E24B99D6DB53}
+		{273ED2FD-9DE9-463D-BE0C-87141CF3420F} = {A6F66FF3-67F0-4771-B746-E24B99D6DB53}
+	EndGlobalSection
+EndGlobal

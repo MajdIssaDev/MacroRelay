@@ -1,0 +1,25 @@
+<ui:FluentWindow x:Class="MacroRelay.App.Views.AddStepWindow"
+                 xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+                 xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+                 xmlns:ui="http://schemas.lepo.co/wpfui/2022/xaml"
+                 Title="Add step"
+                 Width="520"
+                 Height="560"
+                 WindowStartupLocation="CenterOwner"
+                 ExtendsContentIntoTitleBar="True">
+    <Grid Margin="16">
+        <Grid.RowDefinitions>
+            <RowDefinition Height="Auto" />
+            <RowDefinition Height="Auto" />
+            <RowDefinition Height="*" />
+            <RowDefinition Height="Auto" />
+        </Grid.RowDefinitions>
+        <ui:TitleBar Title="Add step" Grid.Row="0" />
+        <TextBox x:Name="SearchBox" Grid.Row="1" Margin="0,8" TextChanged="SearchBox_OnTextChanged" />
+        <ListBox x:Name="ResultList" Grid.Row="2" MouseDoubleClick="ResultList_OnMouseDoubleClick" />
+        <StackPanel Grid.Row="3" Orientation="Horizontal" HorizontalAlignment="Right" Margin="0,12,0,0">
+            <Button Content="Add" IsDefault="True" Click="Add_OnClick" Margin="0,0,8,0" />
+            <Button Content="Cancel" IsCancel="True" />
+        </StackPanel>
+    </Grid>
+</ui:FluentWindow>
