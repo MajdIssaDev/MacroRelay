@@ -396,10 +396,10 @@ void PostText(HWND hwnd, const std::wstring& text) {
   }
 }
 
-int ScaleDelay(const Session& s, int ms, std::mt19937& rng) {
-  double speed = s.speed <= 0 ? 1.0 : s.speed;
-  double value = ms / speed;
-  if (s.jitter) {
+int ScaleDelay(int ms, double speed, bool jitter, std::mt19937& rng) {
+  double sp = speed <= 0 ? 1.0 : speed;
+  double value = ms / sp;
+  if (jitter) {
     std::uniform_real_distribution<double> dist(-0.15, 0.15);
     value *= 1.0 + dist(rng);
   }
@@ -408,11 +408,28 @@ int ScaleDelay(const Session& s, int ms, std::mt19937& rng) {
   return static_cast<int>(std::lround(value));
 }
 
-void PlayStep(Session& s, const Step& step) {
-  HWND hwnd = FindTarget(s.process, s.title);
-  const bool background = s.focus_mode == MR_FOCUS_BACKGROUND && hwnd != nullptr;
+void InterruptibleSleep(std::atomic<bool>& stop, int ms) {
+  if (ms <= 0) return;
+  const auto deadline = std::chrono::steady_clock::now() + std::chrono::milliseconds(ms);
+  while (!stop.load()) {
+    const auto now = std::chrono::steady_clock::now();
+    if (now >= deadline) break;
+    auto left = std::chrono::duration_cast<std::chrono::milliseconds>(deadline - now).count();
+    if (left <= 0) break;
+    std::this_thread::sleep_for(std::chrono::milliseconds(left > 10 ? 10 : left));
+  }
+}
 
-  if (s.focus_mode == MR_FOCUS_TARGET && hwnd && GetForegroundWindow() != hwnd) {
+HWND ResolveTarget(HWND cached, const std::string& process, const std::string& title) {
+  if (cached && IsWindow(cached)) return cached;
+  if (process.empty() && title.empty()) return nullptr;
+  return FindTarget(process, title);
+}
+
+void PlayStep(const Step& step, int focus_mode, HWND hwnd) {
+  const bool background = focus_mode == MR_FOCUS_BACKGROUND && hwnd != nullptr;
+
+  if (focus_mode == MR_FOCUS_TARGET && hwnd && GetForegroundWindow() != hwnd) {
     ActivateWindow(hwnd);
   }
 
@@ -480,39 +497,68 @@ void PlayStep(Session& s, const Step& step) {
   }
 }
 
+void JoinWorker(Session* s) {
+  if (s && s->worker.joinable()) s->worker.join();
+}
+
 void WorkerMain(Session* s) {
   std::mt19937 rng{std::random_device{}()};
+  std::vector<Step> steps;
+  int interval_ms = 50;
+  double speed = 1.0;
+  bool jitter = false;
+  int loop_mode = 0;
+  int repeat_count = 1;
+  int duration_ms = 10000;
+  int focus_mode = 0;
+  std::string process;
+  std::string title;
+  {
+    std::lock_guard<std::mutex> lock(g_mu);
+    steps = s->steps;
+    interval_ms = s->interval_ms;
+    speed = s->speed;
+    jitter = s->jitter;
+    loop_mode = s->loop_mode;
+    repeat_count = s->repeat_count;
+    duration_ms = s->duration_ms;
+    focus_mode = s->focus_mode;
+    process = s->process;
+    title = s->title;
+  }
+
   const auto started = std::chrono::steady_clock::now();
   int loops = 0;
   size_t index = 0;
+  HWND hwnd = nullptr;
   while (!s->stop.load()) {
     if (s->pause.load()) {
       s->state.store(2);
-      std::this_thread::sleep_for(std::chrono::milliseconds(30));
+      InterruptibleSleep(s->stop, 30);
       continue;
     }
     s->state.store(1);
-    if (s->loop_mode == MR_LOOP_DURATION) {
+    if (loop_mode == MR_LOOP_DURATION) {
       auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(
                          std::chrono::steady_clock::now() - started)
                          .count();
-      if (elapsed >= s->duration_ms) break;
+      if (elapsed >= duration_ms) break;
     }
-    if (index >= s->steps.size()) {
+    if (index >= steps.size()) {
       loops++;
-      if (s->loop_mode == MR_LOOP_COUNT && loops >= std::max(1, s->repeat_count)) break;
+      if (loop_mode == MR_LOOP_COUNT && loops >= std::max(1, repeat_count)) break;
       index = 0;
-      int wait = ScaleDelay(*s, s->interval_ms, rng);
-      if (wait > 0) std::this_thread::sleep_for(std::chrono::milliseconds(wait));
-      if (s->steps.empty()) continue;
+      InterruptibleSleep(s->stop, ScaleDelay(interval_ms, speed, jitter, rng));
+      if (steps.empty() || s->stop.load()) continue;
     }
-    const Step& step = s->steps[index++];
+    Step step = steps[index++];
     if (step.kind == MR_KIND_DELAY) {
-      int wait = ScaleDelay(*s, step.delay_ms, rng);
-      if (wait > 0) std::this_thread::sleep_for(std::chrono::milliseconds(wait));
+      InterruptibleSleep(s->stop, ScaleDelay(step.delay_ms, speed, jitter, rng));
       continue;
     }
-    PlayStep(*s, step);
+    if (s->stop.load()) break;
+    hwnd = ResolveTarget(hwnd, process, title);
+    PlayStep(step, focus_mode, hwnd);
   }
   ReleaseStuck();
   s->state.store(0);
@@ -658,17 +704,15 @@ int32_t mr_session_start(int32_t id) {
     std::lock_guard<std::mutex> lock(g_mu);
     s = FindSession(id);
     if (!s) return -1;
-    if (s->worker.joinable()) {
-      if (s->state.load() == 2) {
-        s->pause.store(false);
-        s->state.store(1);
-        return 0;
-      }
-      s->stop.store(true);
+    if (s->worker.joinable() && s->state.load() == 2) {
       s->pause.store(false);
+      s->state.store(1);
+      return 0;
     }
+    s->stop.store(true);
+    s->pause.store(false);
   }
-  if (s->worker.joinable()) s->worker.join();
+  JoinWorker(s);
   s->stop.store(false);
   s->pause.store(false);
   s->state.store(1);
@@ -692,7 +736,7 @@ void mr_session_stop(int32_t id) {
     s->stop.store(true);
     s->pause.store(false);
   }
-  if (s->worker.joinable()) s->worker.join();
+  JoinWorker(s);
   s->state.store(0);
   ReleaseStuck();
 }

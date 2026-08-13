@@ -153,6 +153,7 @@ class _DashboardPageState extends State<DashboardPage> {
     final e = engine;
     if (e == null) return;
     if (m.nativeId == 0) m.nativeId = e.createSession();
+    e.stop(m.nativeId);
     e.clear(m.nativeId);
     e.setOptions(
       id: m.nativeId,
@@ -493,6 +494,7 @@ class _DashboardPageState extends State<DashboardPage> {
               }),
               _ghost('Stop', () {
                 if (m.nativeId != 0) engine?.stop(m.nativeId);
+                setState(() => status = 'Stopped');
               }, color: _danger),
             ],
           ),
