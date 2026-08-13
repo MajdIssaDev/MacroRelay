@@ -11,7 +11,7 @@ class UpdateInfo {
 }
 
 class Updater {
-  static const current = '1.2.1';
+  static const current = '1.2.2';
   static const owner = 'MajdIssaDev';
   static const repo = 'MacroRelay';
 
