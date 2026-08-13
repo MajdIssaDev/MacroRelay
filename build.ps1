@@ -1,5 +1,5 @@
 param(
-    [string]$Version = "1.3.0"
+    [string]$Version = "1.3.1"
 )
 
 $ErrorActionPreference = "Stop"
@@ -24,5 +24,5 @@ if ($LASTEXITCODE -ne 0) { & $dotnet tool install -g vpk }
 $vpk = Join-Path $env:USERPROFILE ".dotnet\tools\vpk.exe"
 if (-not (Test-Path $vpk)) { $vpk = "vpk" }
 
-& $vpk pack --packId MacroRelay --packVersion $Version --packDir $publish --mainExe MacroRelay.exe --packTitle MacroRelay --outputDir $artifacts
+& $vpk pack --packId MacroRelay --packVersion $Version --packDir $publish --mainExe MacroRelay.exe --packTitle MacroRelay --icon (Join-Path $root "app\windows\runner\resources\app_icon.ico") --outputDir $artifacts
 Write-Host "Installer output: $artifacts"

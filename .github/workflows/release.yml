@@ -36,7 +36,7 @@ jobs:
         run: |
           $ver = "${{ github.ref_name }}".TrimStart("v")
           $out = "app\build\windows\x64\runner\Release"
-          vpk pack --packId MacroRelay --packVersion $ver --packDir $out --mainExe MacroRelay.exe --packTitle MacroRelay --outputDir artifacts
+          vpk pack --packId MacroRelay --packVersion $ver --packDir $out --mainExe MacroRelay.exe --packTitle MacroRelay --icon "app\windows\runner\resources\app_icon.ico" --outputDir artifacts
 
       - name: Upload to GitHub Release
         shell: pwsh

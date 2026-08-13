@@ -89,13 +89,13 @@ BEGIN
     BEGIN
         BLOCK "040904e4"
         BEGIN
-            VALUE "CompanyName", "com.macrorelay" "\0"
-            VALUE "FileDescription", "macro_relay" "\0"
+            VALUE "CompanyName", "MajdIssaDev" "\0"
+            VALUE "FileDescription", "MacroRelay" "\0"
             VALUE "FileVersion", VERSION_AS_STRING "\0"
-            VALUE "InternalName", "macro_relay" "\0"
-            VALUE "LegalCopyright", "Copyright (C) 2026 com.macrorelay. All rights reserved." "\0"
-            VALUE "OriginalFilename", "macro_relay.exe" "\0"
-            VALUE "ProductName", "macro_relay" "\0"
+            VALUE "InternalName", "MacroRelay" "\0"
+            VALUE "LegalCopyright", "Copyright (C) 2026 MajdIssaDev. All rights reserved." "\0"
+            VALUE "OriginalFilename", "MacroRelay.exe" "\0"
+            VALUE "ProductName", "MacroRelay" "\0"
             VALUE "ProductVersion", VERSION_AS_STRING "\0"
         END
     END

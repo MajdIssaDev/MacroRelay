@@ -979,20 +979,49 @@ class _DashboardPageState extends State<DashboardPage> {
       builder: (context, cand, _) {
         final hot = cand.isNotEmpty;
         if (terminal) {
+          final plus = AnimatedContainer(
+            duration: const Duration(milliseconds: 80),
+            width: 96,
+            height: 96,
+            padding: const EdgeInsets.all(8),
+            decoration: BoxDecoration(
+              color: hot ? c.accentDim : Colors.transparent,
+              borderRadius: BorderRadius.circular(10),
+              border: Border.all(color: hot ? c.accent : c.line),
+            ),
+            child: Column(
+              children: [
+                Text(
+                  'end',
+                  style: TextStyle(color: hot ? c.accent : c.muted, fontSize: 11),
+                ),
+                Expanded(
+                  child: Center(
+                    child: Icon(Icons.add, color: hot ? c.accent : c.muted),
+                  ),
+                ),
+              ],
+            ),
+          );
           return Tooltip(
-            message: 'Drop here · right-click to insert or record',
+            message: 'Drop here · right-click to insert or record at the end',
             child: GestureDetector(
               onSecondaryTapDown: (d) => _showGapMenu(d.globalPosition, insertAt),
-              child: AnimatedContainer(
-                duration: const Duration(milliseconds: 80),
-                width: 96,
-                height: 96,
-                decoration: BoxDecoration(
-                  color: hot ? c.accentDim : Colors.transparent,
-                  borderRadius: BorderRadius.circular(10),
-                  border: Border.all(color: hot ? c.accent : c.line),
-                ),
-                child: Icon(Icons.add, color: hot ? c.accent : c.muted),
+              child: Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  if (insertAt > 0)
+                    SizedBox(
+                      width: hot ? 32 : 24,
+                      height: 96,
+                      child: Icon(
+                        Icons.arrow_forward,
+                        color: hot ? c.accent : c.muted,
+                        size: 18,
+                      ),
+                    ),
+                  plus,
+                ],
               ),
             ),
           );
