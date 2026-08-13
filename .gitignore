@@ -1,0 +1,17 @@
+bin/
+obj/
+publish/
+Releases/
+.vs/
+*.user
+*.suo
+*.userosscache
+*.sln.docstates
+[Dd]ebug/
+[Rr]elease/
+artifacts/
+*.nupkg
+.idea/
+*.DotSettings.user
+AppPackages/
+BundleArtifacts/
