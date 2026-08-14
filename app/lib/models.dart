@@ -139,7 +139,6 @@ class MacroDef {
     this.pauseMods = 0,
     this.stopVk = 0,
     this.stopMods = 0,
-    this.tag = 0,
     List<MacroStep>? steps,
   })  : id = id ?? _nid(),
         steps = steps ?? [];
@@ -165,7 +164,6 @@ class MacroDef {
   int pauseMods;
   int stopVk;
   int stopMods;
-  int tag;
   List<MacroStep> steps;
   int nativeId = 0;
   int state = 0;
@@ -200,7 +198,6 @@ class MacroDef {
         'pauseMods': pauseMods,
         'stopVk': stopVk,
         'stopMods': stopMods,
-        'tag': tag,
         'steps': steps.map((s) => s.toJson()).toList(),
       };
 
@@ -225,7 +222,6 @@ class MacroDef {
         pauseMods: json['pauseMods'] as int? ?? 0,
         stopVk: json['stopVk'] as int? ?? 0,
         stopMods: json['stopMods'] as int? ?? 0,
-        tag: json['tag'] as int? ?? 0,
         steps: (json['steps'] as List<dynamic>? ?? [])
             .map((e) => MacroStep.fromJson(e as Map<String, dynamic>))
             .toList(),
@@ -251,7 +247,6 @@ class MacroDef {
         pauseMods: pauseMods,
         stopVk: stopVk,
         stopMods: stopMods,
-        tag: tag,
         steps: steps.map((s) => s.copy()).toList(),
       );
 
@@ -259,15 +254,6 @@ class MacroDef {
       DateTime.now().microsecondsSinceEpoch.toRadixString(16) +
       Random().nextInt(0xffff).toRadixString(16);
 }
-
-const tagColors = <int>[
-  0x00000000,
-  0xFF3DDC97,
-  0xFF5B9DFF,
-  0xFFFF8A4C,
-  0xFFC084FC,
-  0xFFFF5C7A,
-];
 
 String bindLabel(int vk, int mods) {
   if (vk <= 0) return 'None';

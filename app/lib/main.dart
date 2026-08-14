@@ -102,6 +102,9 @@ class _DashboardPageState extends State<DashboardPage> {
   final targetKey = GlobalKey();
   final sequenceKey = GlobalKey();
   final insertKey = GlobalKey();
+  final keybindsKey = GlobalKey();
+  final settingsKey = GlobalKey();
+  final sidebarKey = GlobalKey();
 
   Palette get c => AppTheme.of(context);
 
@@ -215,9 +218,24 @@ class _DashboardPageState extends State<DashboardPage> {
         anchor: themeKey,
       ),
       TutorialStep(
+        title: 'Keybinds',
+        body: 'Open Keybinds to change Start, Run once, Record, and Panic stop. Defaults are F6, F7, F9, and F12. Combos like Ctrl+Shift+1 work. Each macro can also have its own Start, Pause, and Stop, and a trigger: Toggle, Hold down, or Run once.',
+        anchor: keybindsKey,
+      ),
+      TutorialStep(
+        title: 'Settings',
+        body: 'Run on Windows startup (opens in the tray), close to tray so macros keep running, and optional beeps on start, pause, and stop. Export or import the whole library as JSON here.',
+        anchor: settingsKey,
+      ),
+      TutorialStep(
         title: 'Record',
         body: 'The record key (default F9) starts and stops recording. Mouse travel is ignored. Clicks on MacroRelay itself are not captured.',
         anchor: recordKey,
+      ),
+      TutorialStep(
+        title: 'Macros',
+        body: 'Use + to add a macro. The upload icon imports JSON. Right-click a card to export, copy JSON, duplicate, or delete it.',
+        anchor: sidebarKey,
       ),
       TutorialStep(
         title: 'Macro name',
@@ -226,7 +244,7 @@ class _DashboardPageState extends State<DashboardPage> {
       ),
       TutorialStep(
         title: 'Play',
-        body: 'Start (loop) uses Repeat. Run once plays the sequence a single time. Rebind keys in the Keybinds tab. Panic stop ends every running macro.',
+        body: 'Start uses Repeat (infinite, count, or time). Run once plays the sequence a single time, then stops. Trigger Hold down loops only while the start key is held. Panic stop (F12) ends every running macro.',
         anchor: startKey,
       ),
       TutorialStep(
@@ -236,12 +254,12 @@ class _DashboardPageState extends State<DashboardPage> {
       ),
       TutorialStep(
         title: 'Sequence',
-        body: 'Click a square to select it. Ctrl+click adds more, Shift+click selects the range. Hold a square to drag the selection. Right-click an arrow or the + slot to insert or record there.',
+        body: 'Click a square to select it. Ctrl+click adds more, Shift+click selects the range. Hold a square to drag the selection. Duplicate clones the selection. Move left / Move right shifts the selected steps. Right-click an arrow or the + slot to insert or record there.',
         anchor: sequenceKey,
       ),
       TutorialStep(
         title: 'Insert step',
-        body: 'Menus open at the button. Capture click X,Y with the crosshair or Control+Shift over the target app. That click does not move your cursor.',
+        body: 'Insert text, keys, waits, mouse wheel, or click-and-drag. Capture click X,Y with the crosshair, then click the target window — or use Control+Shift. That click does not move your cursor.',
         anchor: insertKey,
       ),
     ]);
@@ -792,6 +810,8 @@ class _DashboardPageState extends State<DashboardPage> {
                   recordKey: recordKey,
                   themeKey: themeKey,
                   infoKey: infoKey,
+                  keybindsKey: keybindsKey,
+                  settingsKey: settingsKey,
                 ),
                 Expanded(
                   child: Row(
@@ -819,6 +839,7 @@ class _DashboardPageState extends State<DashboardPage> {
         child: Column(
           children: [
             Padding(
+              key: sidebarKey,
               padding: const EdgeInsets.fromLTRB(16, 16, 12, 8),
               child: Row(
                 children: [
@@ -901,30 +922,6 @@ class _DashboardPageState extends State<DashboardPage> {
                               ],
                             ),
                           ),
-                          const SizedBox(width: 6),
-                          for (var t = 1; t < tagColors.length; t++)
-                            Padding(
-                              padding: const EdgeInsets.only(right: 4),
-                              child: GestureDetector(
-                                onTap: () {
-                                  m.tag = m.tag == t ? 0 : t;
-                                  _save();
-                                  setState(() {});
-                                },
-                                child: Container(
-                                  width: 10,
-                                  height: 10,
-                                  decoration: BoxDecoration(
-                                    color: Color(tagColors[t]),
-                                    shape: BoxShape.circle,
-                                    border: Border.all(
-                                      color: m.tag == t ? c.text : Colors.transparent,
-                                      width: 2,
-                                    ),
-                                  ),
-                                ),
-                              ),
-                            ),
                           IconButton(
                             tooltip: 'Delete macro',
                             visualDensity: VisualDensity.compact,

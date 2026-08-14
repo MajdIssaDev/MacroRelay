@@ -21,6 +21,8 @@ class AppHeader extends StatelessWidget {
     required this.recordKey,
     required this.themeKey,
     required this.infoKey,
+    required this.keybindsKey,
+    required this.settingsKey,
   });
 
   final NativeEngine? engine;
@@ -37,6 +39,8 @@ class AppHeader extends StatelessWidget {
   final GlobalKey recordKey;
   final GlobalKey themeKey;
   final GlobalKey infoKey;
+  final GlobalKey keybindsKey;
+  final GlobalKey settingsKey;
 
   @override
   Widget build(BuildContext context) {
@@ -94,15 +98,21 @@ class AppHeader extends StatelessWidget {
                   _Ghost(label: 'Pause all', onTap: onPauseAll, color: p.text),
                   _Ghost(label: 'Stop all', onTap: onStopAll, color: p.danger),
                   const Spacer(),
-                  IconButton(
-                    tooltip: 'Keybinds',
-                    onPressed: onKeybinds,
-                    icon: Icon(Icons.keyboard_alt_outlined, color: p.accent, size: 20),
+                  KeyedSubtree(
+                    key: keybindsKey,
+                    child: IconButton(
+                      tooltip: 'Keybinds',
+                      onPressed: onKeybinds,
+                      icon: Icon(Icons.keyboard_alt_outlined, color: p.accent, size: 20),
+                    ),
                   ),
-                  IconButton(
-                    tooltip: 'Settings',
-                    onPressed: onSettings,
-                    icon: Icon(Icons.settings_outlined, color: p.accent, size: 20),
+                  KeyedSubtree(
+                    key: settingsKey,
+                    child: IconButton(
+                      tooltip: 'Settings',
+                      onPressed: onSettings,
+                      icon: Icon(Icons.settings_outlined, color: p.accent, size: 20),
+                    ),
                   ),
                   KeyedSubtree(
                     key: themeKey,
