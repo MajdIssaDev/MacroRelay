@@ -13,7 +13,7 @@ class UpdateResult {
 }
 
 class Updater {
-  static const current = '1.3.2';
+  static const current = '1.3.3';
   static const owner = 'MajdIssaDev';
   static const repo = 'MacroRelay';
 

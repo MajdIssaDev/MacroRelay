@@ -443,6 +443,19 @@ HWND ResolveTarget(HWND cached, const std::string& process, const std::string& t
   return FindTarget(process, title);
 }
 
+void EnsureRestoredNoActivate(HWND hwnd) {
+  if (!hwnd || !IsWindow(hwnd) || !IsIconic(hwnd)) return;
+  ShowWindow(hwnd, SW_SHOWNOACTIVATE);
+  SetWindowPos(hwnd, HWND_NOTOPMOST, 0, 0, 0, 0,
+               SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE);
+  HWND fg = GetForegroundWindow();
+  if (fg && fg != hwnd) {
+    SetWindowPos(hwnd, fg, 0, 0, 0, 0,
+                 SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE);
+  }
+  std::this_thread::sleep_for(std::chrono::milliseconds(80));
+}
+
 void PlayStep(const Step& step, int focus_mode, HWND hwnd) {
   const bool background = focus_mode == MR_FOCUS_BACKGROUND && hwnd != nullptr;
 
@@ -451,6 +464,7 @@ void PlayStep(const Step& step, int focus_mode, HWND hwnd) {
   }
 
   if (background) {
+    EnsureRestoredNoActivate(hwnd);
     int cx = step.x;
     int cy = step.y;
     if (!step.has_pos) {
