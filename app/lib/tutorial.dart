@@ -34,6 +34,10 @@ class TutorialOverlay extends StatefulWidget {
 }
 
 class _TutorialOverlayState extends State<TutorialOverlay> with SingleTickerProviderStateMixin {
+  static const _holePad = 14.0;
+  static const _cardW = 360.0;
+  static const _cardH = 220.0;
+
   int index = 0;
   late final AnimationController pulse;
 
@@ -41,6 +45,9 @@ class _TutorialOverlayState extends State<TutorialOverlay> with SingleTickerProv
   void initState() {
     super.initState();
     pulse = AnimationController(vsync: this, duration: const Duration(milliseconds: 1100))..repeat(reverse: true);
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (mounted) setState(() {});
+    });
   }
 
   @override
@@ -59,16 +66,53 @@ class _TutorialOverlayState extends State<TutorialOverlay> with SingleTickerProv
     return origin & box.size;
   }
 
+  Rect? _holeRect(Rect? anchor) => anchor?.inflate(_holePad);
+
+  Offset _cardOrigin(BuildContext context, Rect? anchor) {
+    final size = MediaQuery.sizeOf(context);
+    if (anchor == null) {
+      return Offset((size.width - _cardW) / 2, size.height * 0.32);
+    }
+    final hole = _holeRect(anchor)!;
+    const gap = 16.0;
+
+    var top = hole.bottom + gap;
+    if (top + _cardH > size.height - gap) {
+      top = hole.top - _cardH - gap;
+    }
+    if (top < gap) {
+      top = (hole.bottom + gap).clamp(gap, size.height - _cardH - gap);
+    }
+
+    var left = hole.center.dx - _cardW / 2;
+    left = left.clamp(gap, size.width - _cardW - gap);
+
+    final card = Rect.fromLTWH(left, top, _cardW, _cardH);
+    if (card.overlaps(hole)) {
+      top = hole.bottom + gap;
+      if (top + _cardH > size.height - gap) {
+        top = hole.top - _cardH - gap;
+      }
+      left = hole.center.dx - _cardW / 2;
+      left = left.clamp(gap, size.width - _cardW - gap);
+    }
+
+    return Offset(left, top);
+  }
+
   @override
   Widget build(BuildContext context) {
     final p = AppTheme.of(context);
     final step = widget.steps[index];
     final last = index == widget.steps.length - 1;
-    final rect = _anchorRect();
+    final anchor = _anchorRect();
+    final hole = _holeRect(anchor);
+    final cardOrigin = _cardOrigin(context, anchor);
 
     return Material(
       color: Colors.transparent,
       child: Stack(
+        clipBehavior: Clip.none,
         children: [
           Positioned.fill(
             child: AnimatedBuilder(
@@ -76,7 +120,7 @@ class _TutorialOverlayState extends State<TutorialOverlay> with SingleTickerProv
               builder: (context, _) {
                 return CustomPaint(
                   painter: _SpotlightPainter(
-                    hole: rect?.inflate(8),
+                    hole: hole,
                     color: Colors.black.withValues(alpha: 0.62),
                     glow: p.accent.withValues(alpha: 0.22 + pulse.value * 0.28),
                     border: p.accent,
@@ -85,11 +129,29 @@ class _TutorialOverlayState extends State<TutorialOverlay> with SingleTickerProv
               },
             ),
           ),
+          if (hole != null)
+            Positioned.fromRect(
+              rect: hole,
+              child: IgnorePointer(
+                child: DecoratedBox(
+                  decoration: BoxDecoration(
+                    borderRadius: BorderRadius.circular(14),
+                    boxShadow: [
+                      BoxShadow(
+                        color: Colors.black.withValues(alpha: 0.4),
+                        blurRadius: 22,
+                        spreadRadius: 1,
+                      ),
+                    ],
+                  ),
+                ),
+              ),
+            ),
           AnimatedPositioned(
             duration: const Duration(milliseconds: 320),
             curve: Curves.easeOutCubic,
-            left: _cardLeft(context, rect),
-            top: _cardTop(context, rect),
+            left: cardOrigin.dx,
+            top: cardOrigin.dy,
             child: AnimatedSwitcher(
               duration: const Duration(milliseconds: 240),
               switchInCurve: Curves.easeOutCubic,
@@ -124,21 +186,6 @@ class _TutorialOverlayState extends State<TutorialOverlay> with SingleTickerProv
         ],
       ),
     );
-  }
-
-  double _cardLeft(BuildContext context, Rect? rect) {
-    final w = MediaQuery.sizeOf(context).width;
-    const cardW = 360.0;
-    if (rect == null) return (w - cardW) / 2;
-    return (rect.left).clamp(16, w - cardW - 16);
-  }
-
-  double _cardTop(BuildContext context, Rect? rect) {
-    final h = MediaQuery.sizeOf(context).height;
-    if (rect == null) return h * 0.32;
-    final below = rect.bottom + 16;
-    if (below + 220 < h - 16) return below;
-    return (rect.top - 220).clamp(16, h - 236);
   }
 }
 
@@ -221,12 +268,28 @@ class _SpotlightPainter extends CustomPainter {
       canvas.drawPath(overlay, Paint()..color = color);
       return;
     }
-    final r = RRect.fromRectAndRadius(hole!, const Radius.circular(14));
-    final cut = Path()..addRRect(r);
+
+    final inner = RRect.fromRectAndRadius(hole!, const Radius.circular(14));
+    final cut = Path()..addRRect(inner);
     final dim = Path.combine(PathOperation.difference, overlay, cut);
     canvas.drawPath(dim, Paint()..color = color);
-    canvas.drawRRect(r.inflate(5), Paint()..color = glow..style = PaintingStyle.stroke..strokeWidth = 10);
-    canvas.drawRRect(r, Paint()..color = border..style = PaintingStyle.stroke..strokeWidth = 2);
+
+    // Draw glow and border outside the hole so highlighted UI is not covered.
+    const glowBand = 8.0;
+    const borderBand = 2.0;
+    _drawRing(canvas, inner, glowBand, glow);
+    _drawRing(canvas, inner, borderBand, border);
+  }
+
+  void _drawRing(Canvas canvas, RRect inner, double band, Color paintColor) {
+    final outer = Path()..addRRect(inner.inflate(band));
+    final ring = Path.combine(PathOperation.difference, outer, Path()..addRRect(inner));
+    canvas.drawPath(
+      ring,
+      Paint()
+        ..color = paintColor
+        ..style = PaintingStyle.fill,
+    );
   }
 
   @override

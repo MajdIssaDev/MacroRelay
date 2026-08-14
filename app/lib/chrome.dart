@@ -87,12 +87,11 @@ class AppHeader extends StatelessWidget {
             ),
           ),
           Container(height: 1, color: p.line),
-          SizedBox(
+          Container(
             key: headerKey,
-            height: 52,
-            child: Padding(
-              padding: const EdgeInsets.symmetric(horizontal: 12),
-              child: Row(
+            constraints: const BoxConstraints(minHeight: 52),
+            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
+            child: Row(
                 children: [
                   _Ghost(label: 'Start all', onTap: onStartAll, color: p.text),
                   _Ghost(label: 'Pause all', onTap: onPauseAll, color: p.text),
@@ -168,7 +167,6 @@ class AppHeader extends StatelessWidget {
                     ),
                   ),
                 ],
-              ),
             ),
           ),
           Container(height: 1, color: p.line),
