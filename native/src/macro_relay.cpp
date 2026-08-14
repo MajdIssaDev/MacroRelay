@@ -3,6 +3,9 @@
 #include "macro_relay.h"
 
 #include <windows.h>
+#include <commctrl.h>
+#include <commdlg.h>
+#include <shellapi.h>
 
 #include <algorithm>
 #include <atomic>
@@ -32,6 +35,8 @@ struct Step {
   int delay_ms = 0;
   int x = 0;
   int y = 0;
+  int x2 = 0;
+  int y2 = 0;
   int has_pos = 0;
   std::wstring text;
 };
@@ -69,6 +74,15 @@ std::unordered_map<int, std::unique_ptr<Session>> g_sessions;
 std::mutex g_stuck_mu;
 std::vector<WORD> g_stuck_keys;
 std::vector<int> g_stuck_buttons;
+int g_vk_play = VK_F6;
+int g_vk_once = VK_F7;
+int g_vk_record = VK_F9;
+int g_vk_panic = VK_F12;
+bool g_close_to_tray = false;
+bool g_tray_added = false;
+HWND g_tray_hwnd = nullptr;
+constexpr UINT kTrayMsg = WM_APP + 77;
+constexpr UINT_PTR kTraySubclass = 1;
 
 bool IsExtended(WORD vk) {
   switch (vk) {
@@ -221,7 +235,9 @@ bool IsOwnWindowAt(POINT pt) {
   return pid == GetCurrentProcessId();
 }
 
-bool IsHotkeyVk(int vk) { return vk == VK_F6 || vk == VK_F9; }
+bool IsHotkeyVk(int vk) {
+  return vk == g_vk_play || vk == g_vk_once || vk == g_vk_record || vk == g_vk_panic;
+}
 
 void PushEvent(int kind, int code, int down) {
   MrEvent e{};
@@ -413,6 +429,37 @@ void PostText(HWND hwnd, const std::wstring& text) {
   }
 }
 
+void PostWheel(HWND hwnd, int delta, int x, int y) {
+  POINT pt{x, y};
+  ClientToScreen(hwnd, &pt);
+  PostMessageW(hwnd, WM_MOUSEWHEEL, MAKEWPARAM(0, delta), MAKELPARAM(pt.x, pt.y));
+}
+
+void PostDrag(HWND hwnd, int button, int x1, int y1, int x2, int y2) {
+  WPARAM mk = MK_LBUTTON;
+  if (button == 1) mk = MK_RBUTTON;
+  else if (button == 2) mk = MK_MBUTTON;
+  else if (button == 3) mk = MK_XBUTTON1;
+  else if (button == 4) mk = MK_XBUTTON2;
+  PostMouse(hwnd, button, true, x1, y1);
+  const int n = 12;
+  for (int i = 1; i <= n; i++) {
+    const int x = x1 + (x2 - x1) * i / n;
+    const int y = y1 + (y2 - y1) * i / n;
+    PostMessageW(hwnd, WM_MOUSEMOVE, mk, MAKELPARAM(x, y));
+    std::this_thread::sleep_for(std::chrono::milliseconds(8));
+  }
+  PostMouse(hwnd, button, false, x2, y2);
+}
+
+void SendWheel(int delta) {
+  INPUT in{};
+  in.type = INPUT_MOUSE;
+  in.mi.dwFlags = MOUSEEVENTF_WHEEL;
+  in.mi.mouseData = static_cast<DWORD>(delta);
+  SendInput(1, &in, sizeof(INPUT));
+}
+
 int ScaleDelay(int ms, double speed, bool jitter, std::mt19937& rng) {
   double sp = speed <= 0 ? 1.0 : speed;
   double value = ms / sp;
@@ -484,6 +531,12 @@ void PlayStep(const Step& step, int focus_mode, HWND hwnd) {
       case MR_KIND_TEXT:
         PostText(hwnd, step.text);
         break;
+      case MR_KIND_WHEEL:
+        PostWheel(hwnd, step.code, cx, cy);
+        break;
+      case MR_KIND_DRAG:
+        PostDrag(hwnd, step.code, step.x, step.y, step.x2, step.y2);
+        break;
       default:
         break;
     }
@@ -523,6 +576,22 @@ void PlayStep(const Step& step, int focus_mode, HWND hwnd) {
         SendUnicode(ch, true);
       }
       break;
+    case MR_KIND_WHEEL: {
+      HWND target = hwnd ? hwnd : GetForegroundWindow();
+      if (target && step.has_pos) {
+        PostWheel(target, step.code, step.x, step.y);
+      } else {
+        SendWheel(step.code);
+      }
+      break;
+    }
+    case MR_KIND_DRAG: {
+      HWND target = hwnd ? hwnd : GetForegroundWindow();
+      if (target) {
+        PostDrag(target, step.code, step.x, step.y, step.x2, step.y2);
+      }
+      break;
+    }
     default:
       break;
   }
@@ -577,6 +646,7 @@ void WorkerMain(Session* s) {
     }
     if (index >= steps.size()) {
       loops++;
+      if (loop_mode == MR_LOOP_ONCE) break;
       if (loop_mode == MR_LOOP_COUNT && loops >= std::max(1, repeat_count)) break;
       index = 0;
       InterruptibleSleep(s->stop, ScaleDelay(interval_ms, speed, jitter, rng));
@@ -604,7 +674,7 @@ Session* FindSession(int id) {
 
 extern "C" {
 
-const char* mr_version(void) { return "1.2.2"; }
+const char* mr_version(void) { return "1.4.0"; }
 
 int32_t mr_record_start(int32_t keep_delays) {
   std::lock_guard<std::mutex> lock(g_mu);
@@ -726,6 +796,34 @@ void mr_session_add_text(int32_t id, const char* utf8) {
   Step st;
   st.kind = MR_KIND_TEXT;
   st.text = Utf8ToWide(utf8);
+  s->steps.push_back(std::move(st));
+}
+
+void mr_session_add_wheel(int32_t id, int32_t delta, int32_t x, int32_t y, int32_t has_pos) {
+  std::lock_guard<std::mutex> lock(g_mu);
+  auto* s = FindSession(id);
+  if (!s) return;
+  Step st;
+  st.kind = MR_KIND_WHEEL;
+  st.code = delta;
+  st.x = x;
+  st.y = y;
+  st.has_pos = has_pos;
+  s->steps.push_back(std::move(st));
+}
+
+void mr_session_add_drag(int32_t id, int32_t button, int32_t x1, int32_t y1, int32_t x2, int32_t y2) {
+  std::lock_guard<std::mutex> lock(g_mu);
+  auto* s = FindSession(id);
+  if (!s) return;
+  Step st;
+  st.kind = MR_KIND_DRAG;
+  st.code = button;
+  st.x = x1;
+  st.y = y1;
+  st.x2 = x2;
+  st.y2 = y2;
+  st.has_pos = 1;
   s->steps.push_back(std::move(st));
 }
 
@@ -862,8 +960,8 @@ int32_t mr_hotkey_poll(int32_t* play_toggle, int32_t* record_toggle) {
   static bool primed = false;
   static bool play_was = false;
   static bool record_was = false;
-  const bool play_down = (GetAsyncKeyState(VK_F6) & 0x8000) != 0;
-  const bool record_down = (GetAsyncKeyState(VK_F9) & 0x8000) != 0;
+  const bool play_down = (GetAsyncKeyState(g_vk_play) & 0x8000) != 0;
+  const bool record_down = (GetAsyncKeyState(g_vk_record) & 0x8000) != 0;
   if (!primed) {
     play_was = play_down;
     record_was = record_down;
@@ -881,13 +979,161 @@ int32_t mr_hotkey_poll(int32_t* play_toggle, int32_t* record_toggle) {
   return play || rec;
 }
 
-int32_t mr_window_command(int32_t cmd) {
+void mr_hotkey_set(int32_t play_vk, int32_t once_vk, int32_t record_vk, int32_t panic_vk) {
+  if (play_vk) g_vk_play = play_vk;
+  if (once_vk) g_vk_once = once_vk;
+  if (record_vk) g_vk_record = record_vk;
+  if (panic_vk) g_vk_panic = panic_vk;
+}
+
+int32_t mr_key_down(int32_t vk) {
+  if (vk <= 0 || vk > 255) return 0;
+  return (GetAsyncKeyState(vk) & 0x8000) ? 1 : 0;
+}
+
+int32_t mr_any_key_down(void) {
+  const int extra[] = {VK_MBUTTON, VK_XBUTTON1, VK_XBUTTON2};
+  for (int vk : extra) {
+    if (GetAsyncKeyState(vk) & 0x8000) return vk;
+  }
+  for (int vk = 0x08; vk <= 0xFE; vk++) {
+    if (vk == VK_SHIFT || vk == VK_CONTROL || vk == VK_MENU || vk == VK_LSHIFT || vk == VK_RSHIFT ||
+        vk == VK_LCONTROL || vk == VK_RCONTROL || vk == VK_LMENU || vk == VK_RMENU || vk == VK_CAPITAL)
+      continue;
+    if (GetAsyncKeyState(vk) & 0x8000) return vk;
+  }
+  return 0;
+}
+
+void mr_beep(int32_t kind) {
+  DWORD freq = 880;
+  if (kind == 1) freq = 660;
+  if (kind == 2) freq = 440;
+  Beep(freq, 70);
+}
+
+int32_t mr_pick_file(int32_t save, char* out, int32_t out_len) {
+  if (!out || out_len < 8) return 0;
+  wchar_t path[MAX_PATH]{};
+  OPENFILENAMEW ofn{};
+  ofn.lStructSize = sizeof(ofn);
+  ofn.hwndOwner = GetForegroundWindow();
+  ofn.lpstrFilter = L"JSON (*.json)\0*.json\0All files (*.*)\0*.*\0";
+  ofn.lpstrFile = path;
+  ofn.nMaxFile = MAX_PATH;
+  ofn.Flags = OFN_EXPLORER | OFN_HIDEREADONLY | OFN_NOCHANGEDIR;
+  ofn.lpstrDefExt = L"json";
+  BOOL ok = FALSE;
+  if (save) {
+    ofn.Flags |= OFN_OVERWRITEPROMPT;
+    ok = GetSaveFileNameW(&ofn);
+  } else {
+    ofn.Flags |= OFN_FILEMUSTEXIST;
+    ok = GetOpenFileNameW(&ofn);
+  }
+  if (!ok) return 0;
+  std::string utf8 = WideToUtf8(path);
+  std::snprintf(out, static_cast<size_t>(out_len), "%s", utf8.c_str());
+  return 1;
+}
+
+int32_t mr_startup_get(void) {
+  HKEY key = nullptr;
+  if (RegOpenKeyExW(HKEY_CURRENT_USER, L"Software\\Microsoft\\Windows\\CurrentVersion\\Run", 0,
+                    KEY_READ, &key) != ERROR_SUCCESS)
+    return 0;
+  DWORD type = 0, bytes = 0;
+  const LONG st = RegQueryValueExW(key, L"MacroRelay", nullptr, &type, nullptr, &bytes);
+  RegCloseKey(key);
+  return st == ERROR_SUCCESS ? 1 : 0;
+}
+
+int32_t mr_startup_set(int32_t enable) {
+  HKEY key = nullptr;
+  if (RegOpenKeyExW(HKEY_CURRENT_USER, L"Software\\Microsoft\\Windows\\CurrentVersion\\Run", 0,
+                    KEY_SET_VALUE, &key) != ERROR_SUCCESS)
+    return 0;
+  LONG st;
+  if (enable) {
+    wchar_t exe[MAX_PATH]{};
+    GetModuleFileNameW(nullptr, exe, MAX_PATH);
+    wchar_t cmd[MAX_PATH + 24]{};
+    _snwprintf_s(cmd, _TRUNCATE, L"\"%s\" --tray", exe);
+    st = RegSetValueExW(key, L"MacroRelay", 0, REG_SZ, reinterpret_cast<const BYTE*>(cmd),
+                        static_cast<DWORD>((wcslen(cmd) + 1) * sizeof(wchar_t)));
+  } else {
+    st = RegDeleteValueW(key, L"MacroRelay");
+    if (st == ERROR_FILE_NOT_FOUND) st = ERROR_SUCCESS;
+  }
+  RegCloseKey(key);
+  return st == ERROR_SUCCESS ? 1 : 0;
+}
+
+LRESULT CALLBACK TraySubclass(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lparam, UINT_PTR, DWORD_PTR) {
+  if (msg == kTrayMsg) {
+    if (lparam == WM_LBUTTONUP || lparam == WM_LBUTTONDBLCLK) {
+      ShowWindow(hwnd, SW_SHOW);
+      ShowWindow(hwnd, SW_RESTORE);
+      SetForegroundWindow(hwnd);
+    }
+    return 0;
+  }
+  if (msg == WM_CLOSE && g_close_to_tray) {
+    ShowWindow(hwnd, SW_HIDE);
+    return 0;
+  }
+  return DefSubclassProc(hwnd, msg, wparam, lparam);
+}
+
+HWND AppHwnd() {
   HWND hwnd = GetActiveWindow();
   if (!hwnd) hwnd = GetForegroundWindow();
   if (hwnd) {
     HWND root = GetAncestor(hwnd, GA_ROOT);
     if (root) hwnd = root;
   }
+  return hwnd;
+}
+
+void mr_close_to_tray(int32_t enable) { g_close_to_tray = enable != 0; }
+
+int32_t mr_tray_set(int32_t enable) {
+  HWND hwnd = AppHwnd();
+  if (!hwnd) return 0;
+  INITCOMMONCONTROLSEX icc{};
+  icc.dwSize = sizeof(icc);
+  icc.dwICC = ICC_WIN95_CLASSES;
+  InitCommonControlsEx(&icc);
+  if (enable) {
+    if (!g_tray_hwnd) {
+      SetWindowSubclass(hwnd, TraySubclass, kTraySubclass, 0);
+      g_tray_hwnd = hwnd;
+    }
+    if (!g_tray_added) {
+      NOTIFYICONDATAW nid{};
+      nid.cbSize = sizeof(nid);
+      nid.hWnd = hwnd;
+      nid.uID = 1;
+      nid.uFlags = NIF_MESSAGE | NIF_ICON | NIF_TIP;
+      nid.uCallbackMessage = kTrayMsg;
+      nid.hIcon = LoadIconW(GetModuleHandleW(nullptr), MAKEINTRESOURCEW(101));
+      if (!nid.hIcon) nid.hIcon = LoadIconW(nullptr, IDI_APPLICATION);
+      lstrcpynW(nid.szTip, L"MacroRelay", 128);
+      g_tray_added = Shell_NotifyIconW(NIM_ADD, &nid) != FALSE;
+    }
+  } else if (g_tray_added) {
+    NOTIFYICONDATAW nid{};
+    nid.cbSize = sizeof(nid);
+    nid.hWnd = g_tray_hwnd ? g_tray_hwnd : hwnd;
+    nid.uID = 1;
+    Shell_NotifyIconW(NIM_DELETE, &nid);
+    g_tray_added = false;
+  }
+  return 1;
+}
+
+int32_t mr_window_command(int32_t cmd) {
+  HWND hwnd = AppHwnd();
   if (!hwnd) return 0;
   switch (cmd) {
     case 0:
@@ -901,7 +1147,19 @@ int32_t mr_window_command(int32_t cmd) {
       ShowWindow(hwnd, IsZoomed(hwnd) ? SW_RESTORE : SW_MAXIMIZE);
       break;
     case 3:
-      PostMessageW(hwnd, WM_CLOSE, 0, 0);
+      if (g_close_to_tray) {
+        ShowWindow(hwnd, SW_HIDE);
+      } else {
+        PostMessageW(hwnd, WM_CLOSE, 0, 0);
+      }
+      break;
+    case 4:
+      ShowWindow(hwnd, SW_HIDE);
+      break;
+    case 5:
+      ShowWindow(hwnd, SW_SHOW);
+      ShowWindow(hwnd, SW_RESTORE);
+      SetForegroundWindow(hwnd);
       break;
     default:
       return 0;

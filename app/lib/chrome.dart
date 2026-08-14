@@ -9,10 +9,13 @@ class AppHeader extends StatelessWidget {
     super.key,
     required this.engine,
     required this.recording,
+    required this.recordLabel,
     required this.onRecord,
     required this.onStartAll,
     required this.onPauseAll,
     required this.onStopAll,
+    required this.onKeybinds,
+    required this.onSettings,
     required this.onInfo,
     required this.headerKey,
     required this.recordKey,
@@ -22,10 +25,13 @@ class AppHeader extends StatelessWidget {
 
   final NativeEngine? engine;
   final bool recording;
+  final String recordLabel;
   final VoidCallback onRecord;
   final VoidCallback onStartAll;
   final VoidCallback onPauseAll;
   final VoidCallback onStopAll;
+  final VoidCallback onKeybinds;
+  final VoidCallback onSettings;
   final VoidCallback onInfo;
   final GlobalKey headerKey;
   final GlobalKey recordKey;
@@ -88,6 +94,16 @@ class AppHeader extends StatelessWidget {
                   _Ghost(label: 'Pause all', onTap: onPauseAll, color: p.text),
                   _Ghost(label: 'Stop all', onTap: onStopAll, color: p.danger),
                   const Spacer(),
+                  IconButton(
+                    tooltip: 'Keybinds',
+                    onPressed: onKeybinds,
+                    icon: Icon(Icons.keyboard_alt_outlined, color: p.accent, size: 20),
+                  ),
+                  IconButton(
+                    tooltip: 'Settings',
+                    onPressed: onSettings,
+                    icon: Icon(Icons.settings_outlined, color: p.accent, size: 20),
+                  ),
                   KeyedSubtree(
                     key: themeKey,
                     child: Row(
@@ -138,7 +154,7 @@ class AppHeader extends StatelessWidget {
                         backgroundColor: recording ? p.danger : p.accent,
                         foregroundColor: p.light ? Colors.white : Colors.black,
                       ),
-                      child: Text(recording ? 'Stop rec (F9)' : 'Record (F9)'),
+                      child: Text(recording ? 'Stop rec ($recordLabel)' : 'Record ($recordLabel)'),
                     ),
                   ),
                 ],

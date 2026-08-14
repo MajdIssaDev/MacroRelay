@@ -1,7 +1,6 @@
-import 'dart:convert';
-import 'dart:io';
-
 import 'package:flutter/material.dart';
+
+import 'settings.dart';
 
 class Palette {
   const Palette({
@@ -145,12 +144,9 @@ class ThemeController extends ChangeNotifier {
 
   Future<void> _load() async {
     try {
-      final file = await _file();
-      if (await file.exists()) {
-        final data = jsonDecode(await file.readAsString()) as Map<String, dynamic>;
-        palette = paletteById(data['theme'] as String? ?? 'ops');
-        notifyListeners();
-      }
+      final data = await SettingsStore.read();
+      palette = paletteById(data['theme'] as String? ?? 'ops');
+      notifyListeners();
     } catch (_) {}
   }
 
@@ -158,15 +154,8 @@ class ThemeController extends ChangeNotifier {
     palette = paletteById(id);
     notifyListeners();
     try {
-      final file = await _file();
-      await file.writeAsString(const JsonEncoder.withIndent('  ').convert({'theme': palette.id}));
+      await SettingsStore.patch({'theme': palette.id});
     } catch (_) {}
-  }
-
-  static Future<File> _file() async {
-    final dir = Directory('${Platform.environment['APPDATA'] ?? '.'}\\MacroRelay');
-    if (!await dir.exists()) await dir.create(recursive: true);
-    return File('${dir.path}\\settings.json');
   }
 }
 

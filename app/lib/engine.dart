@@ -44,6 +44,10 @@ typedef _AddDelayC = Void Function(Int32, Int32);
 typedef _AddDelayD = void Function(int, int);
 typedef _AddTextC = Void Function(Int32, Pointer<Utf8>);
 typedef _AddTextD = void Function(int, Pointer<Utf8>);
+typedef _AddWheelC = Void Function(Int32, Int32, Int32, Int32, Int32);
+typedef _AddWheelD = void Function(int, int, int, int, int);
+typedef _AddDragC = Void Function(Int32, Int32, Int32, Int32, Int32, Int32);
+typedef _AddDragD = void Function(int, int, int, int, int, int);
 typedef _StartC = Int32 Function(Int32);
 typedef _StartD = int Function(int);
 typedef _StateC = Int32 Function(Int32);
@@ -60,6 +64,18 @@ typedef _FlagC = Int32 Function();
 typedef _FlagD = int Function();
 typedef _HotkeyC = Int32 Function(Pointer<Int32>, Pointer<Int32>);
 typedef _HotkeyD = int Function(Pointer<Int32>, Pointer<Int32>);
+typedef _HotkeySetC = Void Function(Int32, Int32, Int32, Int32);
+typedef _HotkeySetD = void Function(int, int, int, int);
+typedef _KeyDownC = Int32 Function(Int32);
+typedef _KeyDownD = int Function(int);
+typedef _BeepC = Void Function(Int32);
+typedef _BeepD = void Function(int);
+typedef _PickFileC = Int32 Function(Int32, Pointer<Utf8>, Int32);
+typedef _PickFileD = int Function(int, Pointer<Utf8>, int);
+typedef _EnableC = Int32 Function(Int32);
+typedef _EnableD = int Function(int);
+typedef _SetFlagC = Void Function(Int32);
+typedef _SetFlagD = void Function(int);
 typedef _WinCmdC = Int32 Function(Int32);
 typedef _WinCmdD = int Function(int);
 
@@ -85,6 +101,8 @@ class NativeEngine {
         _addMouse = lib.lookupFunction<_AddMouseC, _AddMouseD>('mr_session_add_mouse'),
         _addDelay = lib.lookupFunction<_AddDelayC, _AddDelayD>('mr_session_add_delay'),
         _addText = lib.lookupFunction<_AddTextC, _AddTextD>('mr_session_add_text'),
+        _addWheel = lib.lookupFunction<_AddWheelC, _AddWheelD>('mr_session_add_wheel'),
+        _addDrag = lib.lookupFunction<_AddDragC, _AddDragD>('mr_session_add_drag'),
         _start = lib.lookupFunction<_StartC, _StartD>('mr_session_start'),
         _pause = lib.lookupFunction<_IdC, _IdD>('mr_session_pause'),
         _stop = lib.lookupFunction<_IdC, _IdD>('mr_session_stop'),
@@ -95,6 +113,15 @@ class NativeEngine {
         _cursor = lib.lookupFunction<_CursorC, _CursorD>('mr_cursor_client'),
         _ctrlShift = lib.lookupFunction<_FlagC, _FlagD>('mr_ctrl_shift_down'),
         _hotkeys = lib.lookupFunction<_HotkeyC, _HotkeyD>('mr_hotkey_poll'),
+        _hotkeySet = lib.lookupFunction<_HotkeySetC, _HotkeySetD>('mr_hotkey_set'),
+        _keyDown = lib.lookupFunction<_KeyDownC, _KeyDownD>('mr_key_down'),
+        _anyKey = lib.lookupFunction<_FlagC, _FlagD>('mr_any_key_down'),
+        _beep = lib.lookupFunction<_BeepC, _BeepD>('mr_beep'),
+        _pickFile = lib.lookupFunction<_PickFileC, _PickFileD>('mr_pick_file'),
+        _startupGet = lib.lookupFunction<_FlagC, _FlagD>('mr_startup_get'),
+        _startupSet = lib.lookupFunction<_EnableC, _EnableD>('mr_startup_set'),
+        _traySet = lib.lookupFunction<_EnableC, _EnableD>('mr_tray_set'),
+        _closeToTray = lib.lookupFunction<_SetFlagC, _SetFlagD>('mr_close_to_tray'),
         _winCmd = lib.lookupFunction<_WinCmdC, _WinCmdD>('mr_window_command');
 
   final _RecordStartD _recordStart;
@@ -109,6 +136,8 @@ class NativeEngine {
   final _AddMouseD _addMouse;
   final _AddDelayD _addDelay;
   final _AddTextD _addText;
+  final _AddWheelD _addWheel;
+  final _AddDragD _addDrag;
   final _StartD _start;
   final _IdD _pause;
   final _IdD _stop;
@@ -119,6 +148,15 @@ class NativeEngine {
   final _CursorD _cursor;
   final _FlagD _ctrlShift;
   final _HotkeyD _hotkeys;
+  final _HotkeySetD _hotkeySet;
+  final _KeyDownD _keyDown;
+  final _FlagD _anyKey;
+  final _BeepD _beep;
+  final _PickFileD _pickFile;
+  final _FlagD _startupGet;
+  final _EnableD _startupSet;
+  final _EnableD _traySet;
+  final _SetFlagD _closeToTray;
   final _WinCmdD _winCmd;
 
   static NativeEngine? tryLoad() {
@@ -183,6 +221,12 @@ class NativeEngine {
     malloc.free(p);
   }
 
+  void addWheel(int id, int delta, {int? x, int? y}) =>
+      _addWheel(id, delta, x ?? 0, y ?? 0, (x != null && y != null) ? 1 : 0);
+
+  void addDrag(int id, int button, int x1, int y1, int x2, int y2) =>
+      _addDrag(id, button, x1, y1, x2, y2);
+
   int start(int id) => _start(id);
   void pause(int id) => _pause(id);
   void stop(int id) => _stop(id);
@@ -230,8 +274,45 @@ class NativeEngine {
     return result;
   }
 
+  void hotkeySet({required int play, required int once, required int record, required int panic}) =>
+      _hotkeySet(play, once, record, panic);
+
+  bool keyDown(int vk) => vk > 0 && _keyDown(vk) != 0;
+
+  int anyKeyDown() => _anyKey();
+
+  int modifierBits() {
+    var bits = 0;
+    if (keyDown(0x11)) bits |= 1;
+    if (keyDown(0x10)) bits |= 2;
+    if (keyDown(0x12)) bits |= 4;
+    return bits;
+  }
+
+  bool bindDown(int vk, int mods) {
+    if (vk <= 0) return false;
+    return keyDown(vk) && modifierBits() == mods;
+  }
+
+  void beep(int kind) => _beep(kind);
+
+  String? pickFile({required bool save}) {
+    final buf = calloc<Uint8>(1024).cast<Utf8>();
+    final ok = _pickFile(save ? 1 : 0, buf, 1024);
+    final path = ok == 0 ? null : buf.toDartString();
+    calloc.free(buf);
+    return path;
+  }
+
+  bool startupGet() => _startupGet() != 0;
+  bool startupSet(bool enable) => _startupSet(enable ? 1 : 0) != 0;
+  void traySet(bool enable) => _traySet(enable ? 1 : 0);
+  void closeToTray(bool enable) => _closeToTray(enable ? 1 : 0);
+
   void windowDrag() => _winCmd(0);
   void windowMinimize() => _winCmd(1);
   void windowMaximizeToggle() => _winCmd(2);
   void windowClose() => _winCmd(3);
+  void windowHide() => _winCmd(4);
+  void windowShow() => _winCmd(5);
 }

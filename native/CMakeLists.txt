@@ -8,7 +8,7 @@ add_library(macro_relay_native SHARED
 target_include_directories(macro_relay_native PUBLIC include)
 target_compile_definitions(macro_relay_native PRIVATE MACRO_RELAY_EXPORTS UNICODE _UNICODE)
 target_compile_features(macro_relay_native PUBLIC cxx_std_17)
-target_link_libraries(macro_relay_native PRIVATE user32 advapi32)
+target_link_libraries(macro_relay_native PRIVATE user32 advapi32 comdlg32 comctl32 shell32)
 set_target_properties(macro_relay_native PROPERTIES
   OUTPUT_NAME "macro_relay_native"
   RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}"

@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:io';
 import 'dart:math' as math;
 
 import 'package:flutter/material.dart';
@@ -6,8 +7,10 @@ import 'package:flutter/services.dart';
 
 import 'chrome.dart';
 import 'engine.dart';
+import 'keybinds.dart';
 import 'menus.dart';
 import 'models.dart';
+import 'settings.dart';
 import 'theme.dart';
 import 'tutorial.dart';
 import 'updater.dart';
@@ -60,6 +63,7 @@ class DashboardPage extends StatefulWidget {
 
 class _DashboardPageState extends State<DashboardPage> {
   final engine = NativeEngine.tryLoad();
+  final settings = AppSettings();
   final macros = <MacroDef>[];
   MacroDef? selected;
   final selectedIndices = <int>{};
@@ -70,6 +74,8 @@ class _DashboardPageState extends State<DashboardPage> {
   bool keepDelays = true;
   bool recording = false;
   bool nameHover = false;
+  bool _hotkeysPaused = false;
+  int _editorTab = 0;
   String status = 'Ready';
   String updateStatus = '';
   bool _updating = false;
@@ -79,6 +85,14 @@ class _DashboardPageState extends State<DashboardPage> {
   final nameFocus = FocusNode();
   late final TextEditingController nameCtrl;
   bool editingName = false;
+  bool _globalPlayWas = false;
+  bool _globalOnceWas = false;
+  bool _recordWas = false;
+  bool _panicWas = false;
+  final _playWas = <String, bool>{};
+  final _pauseWas = <String, bool>{};
+  final _stopWas = <String, bool>{};
+  final _holdOn = <String, bool>{};
   final headerKey = GlobalKey();
   final recordKey = GlobalKey();
   final themeKey = GlobalKey();
@@ -118,6 +132,7 @@ class _DashboardPageState extends State<DashboardPage> {
   }
 
   Future<void> _load() async {
+    await settings.load();
     try {
       final file = await libraryFile();
       if (await file.exists()) {
@@ -128,7 +143,44 @@ class _DashboardPageState extends State<DashboardPage> {
     } catch (_) {}
     selected = macros.isEmpty ? null : macros.first;
     nameCtrl.text = selected?.name ?? '';
+    _applyEngineSettings();
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      _applyEngineSettings();
+      if (Platform.executableArguments.contains('--tray')) {
+        engine?.traySet(true);
+        engine?.windowHide();
+      }
+    });
     setState(() {});
+  }
+
+  void _applyEngineSettings() {
+    final e = engine;
+    if (e == null) return;
+    e.hotkeySet(
+      play: settings.playVk,
+      once: settings.onceVk,
+      record: settings.recordVk,
+      panic: settings.panicVk,
+    );
+    e.closeToTray(settings.closeToTray);
+    e.traySet(settings.closeToTray || settings.runOnStartup);
+    settings.runOnStartup = e.startupGet();
+    _syncBindEdges();
+  }
+
+  void _syncBindEdges() {
+    final e = engine;
+    if (e == null) return;
+    _globalPlayWas = e.bindDown(settings.playVk, settings.playMods);
+    _globalOnceWas = e.bindDown(settings.onceVk, settings.onceMods);
+    _recordWas = e.bindDown(settings.recordVk, settings.recordMods);
+    _panicWas = e.bindDown(settings.panicVk, settings.panicMods);
+    for (final m in macros) {
+      if (m.playVk > 0) _playWas[m.id] = e.bindDown(m.playVk, m.playMods);
+      if (m.pauseVk > 0) _pauseWas[m.id] = e.bindDown(m.pauseVk, m.pauseMods);
+      if (m.stopVk > 0) _stopWas[m.id] = e.bindDown(m.stopVk, m.stopMods);
+    }
   }
 
   Future<void> _save() async {
@@ -164,7 +216,7 @@ class _DashboardPageState extends State<DashboardPage> {
       ),
       TutorialStep(
         title: 'Record',
-        body: 'F9 starts and stops recording. Mouse travel is ignored. Clicks on MacroRelay itself are not captured — use F9 so Stop rec does not add an extra click.',
+        body: 'The record key (default F9) starts and stops recording. Mouse travel is ignored. Clicks on MacroRelay itself are not captured.',
         anchor: recordKey,
       ),
       TutorialStep(
@@ -174,7 +226,7 @@ class _DashboardPageState extends State<DashboardPage> {
       ),
       TutorialStep(
         title: 'Play',
-        body: 'F6 starts or stops the selected macro. Start all / Pause all / Stop all control every enabled macro.',
+        body: 'Start (loop) uses Repeat. Run once plays the sequence a single time. Rebind keys in the Keybinds tab. Panic stop ends every running macro.',
         anchor: startKey,
       ),
       TutorialStep(
@@ -189,7 +241,7 @@ class _DashboardPageState extends State<DashboardPage> {
       ),
       TutorialStep(
         title: 'Insert step',
-        body: 'Menus open at the button. Capture click X,Y with Control+Shift over the target app. That click does not move your cursor.',
+        body: 'Menus open at the button. Capture click X,Y with the crosshair or Control+Shift over the target app. That click does not move your cursor.',
         anchor: insertKey,
       ),
     ]);
@@ -241,18 +293,19 @@ class _DashboardPageState extends State<DashboardPage> {
     }
   }
 
-  void _ensureNative(MacroDef m) {
+  void _ensureNative(MacroDef m, {int? loopMode}) {
     final e = engine;
     if (e == null) return;
     if (m.nativeId == 0) m.nativeId = e.createSession();
     e.stop(m.nativeId);
     e.clear(m.nativeId);
+    final mode = loopMode ?? (m.timeLimit ? 2 : m.loopMode);
     e.setOptions(
       id: m.nativeId,
       intervalMs: m.intervalMs,
       speed: m.speed,
       jitter: m.jitter,
-      loopMode: m.timeLimit ? 2 : m.loopMode,
+      loopMode: mode,
       repeatCount: m.repeatCount,
       durationMs: m.durationMs,
       focusTarget: m.focusTarget || m.process.isNotEmpty,
@@ -268,11 +321,19 @@ class _DashboardPageState extends State<DashboardPage> {
           e.addDelay(m.nativeId, step.delayMs);
         case 3:
           e.addText(m.nativeId, step.text);
+        case 4:
+          e.addWheel(m.nativeId, step.code, x: step.x, y: step.y);
+        case 5:
+          e.addDrag(m.nativeId, step.code, step.x ?? 0, step.y ?? 0, step.x2 ?? 0, step.y2 ?? 0);
       }
     }
   }
 
-  void _play(MacroDef m) {
+  void _cue(int kind) {
+    if (settings.audioCues) engine?.beep(kind);
+  }
+
+  void _play(MacroDef m, {int? loopMode}) {
     if (engine == null) {
       setState(() => status = 'Native engine not loaded.');
       return;
@@ -281,29 +342,120 @@ class _DashboardPageState extends State<DashboardPage> {
       setState(() => status = 'Add steps, or record, first.');
       return;
     }
-    _ensureNative(m);
+    _ensureNative(m, loopMode: loopMode);
     engine!.start(m.nativeId);
-    setState(() => status = 'Playing ${m.name}');
+    _cue(0);
+    setState(() => status = loopMode == 3 ? 'Playing ${m.name} once' : 'Playing ${m.name}');
+  }
+
+  void _playOnce(MacroDef m) {
+    if (recording) return;
+    _play(m, loopMode: 3);
   }
 
   void _togglePlay() {
     final m = selected;
     if (m == null || recording) return;
+    _togglePlayMacro(m);
+  }
+
+  void _togglePlayMacro(MacroDef m) {
     final running = m.nativeId != 0 && (engine?.state(m.nativeId) ?? m.state) != 0;
     if (running) {
-      engine?.stop(m.nativeId);
-      setState(() => status = 'Stopped');
+      _stopMacro(m);
       return;
     }
     _play(m);
   }
 
+  void _pauseMacro(MacroDef m) {
+    if (m.nativeId != 0) engine?.pause(m.nativeId);
+    _cue(1);
+    setState(() {});
+  }
+
+  void _stopMacro(MacroDef m) {
+    if (m.nativeId != 0) engine?.stop(m.nativeId);
+    _holdOn[m.id] = false;
+    _cue(2);
+    setState(() => status = 'Stopped');
+  }
+
+  bool _took(bool now, bool was) => now && !was;
+
+  void _handleTrigger(MacroDef m, bool down, bool was) {
+    if (recording) return;
+    if (m.triggerMode == 1) {
+      if (down && !(_holdOn[m.id] ?? false)) {
+        final running = m.nativeId != 0 && (engine?.state(m.nativeId) ?? m.state) != 0;
+        if (!running) _play(m, loopMode: 0);
+        _holdOn[m.id] = true;
+      } else if (!down && (_holdOn[m.id] ?? false)) {
+        _stopMacro(m);
+      }
+      return;
+    }
+    if (_took(down, was)) {
+      if (m.triggerMode == 2) {
+        _playOnce(m);
+      } else {
+        _togglePlayMacro(m);
+      }
+    }
+  }
+
   void _pollHotkeys() {
     final e = engine;
-    if (e == null) return;
-    final keys = e.pollHotkeys();
-    if (keys.record) _toggleRecord();
-    if (keys.play) _togglePlay();
+    if (e == null || _hotkeysPaused) return;
+
+    final recordNow = e.bindDown(settings.recordVk, settings.recordMods);
+    if (_took(recordNow, _recordWas)) _toggleRecord();
+    _recordWas = recordNow;
+
+    final panicNow = e.bindDown(settings.panicVk, settings.panicMods);
+    if (_took(panicNow, _panicWas)) {
+      e.stopAll();
+      _holdOn.clear();
+      _cue(2);
+      setState(() => status = 'Panic stop');
+    }
+    _panicWas = panicNow;
+
+    var consumedPlay = false;
+    var consumedOnce = false;
+
+    for (final m in macros) {
+      if (m.pauseVk > 0) {
+        final down = e.bindDown(m.pauseVk, m.pauseMods);
+        if (_took(down, _pauseWas[m.id] ?? false)) _pauseMacro(m);
+        _pauseWas[m.id] = down;
+      }
+      if (m.stopVk > 0) {
+        final down = e.bindDown(m.stopVk, m.stopMods);
+        if (_took(down, _stopWas[m.id] ?? false)) _stopMacro(m);
+        _stopWas[m.id] = down;
+      }
+      if (m.playVk > 0) {
+        final down = e.bindDown(m.playVk, m.playMods);
+        _handleTrigger(m, down, _playWas[m.id] ?? false);
+        _playWas[m.id] = down;
+        if (m.playVk == settings.playVk && m.playMods == settings.playMods) consumedPlay = true;
+        if (m.playVk == settings.onceVk && m.playMods == settings.onceMods) consumedOnce = true;
+      }
+    }
+
+    final sel = selected;
+    final playNow = e.bindDown(settings.playVk, settings.playMods);
+    if (!consumedPlay && sel != null && sel.playVk == 0) {
+      _handleTrigger(sel, playNow, _globalPlayWas);
+    }
+    _globalPlayWas = playNow;
+
+    final onceNow = e.bindDown(settings.onceVk, settings.onceMods);
+    if (!consumedOnce && _took(onceNow, _globalOnceWas) && sel != null && !recording) {
+      _playOnce(sel);
+    }
+    _globalOnceWas = onceNow;
   }
 
   void _insert(MacroStep step) {
@@ -396,6 +548,132 @@ class _DashboardPageState extends State<DashboardPage> {
     setState(() {});
   }
 
+  void _duplicateSelected() {
+    final m = selected;
+    if (m == null || selectedIndices.isEmpty) return;
+    final order = selectedIndices.toList()..sort();
+    final copies = [for (final i in order) m.steps[i].copy()];
+    final at = order.last + 1;
+    m.steps.insertAll(at, copies);
+    selectedIndices
+      ..clear()
+      ..addAll([for (var k = 0; k < copies.length; k++) at + k]);
+    selectionAnchor = at;
+    _save();
+    setState(() {});
+  }
+
+  void _nudgeSelected(int dir) {
+    final m = selected;
+    if (m == null || selectedIndices.isEmpty) return;
+    final order = selectedIndices.toList()..sort();
+    if (dir < 0) {
+      _moveSelectedTo(order.first - 1);
+    } else {
+      _moveSelectedTo(order.last + 2);
+    }
+  }
+
+  void _duplicateMacro(MacroDef m) {
+    final copy = m.duplicate();
+    macros.insert(macros.indexOf(m) + 1, copy);
+    selected = copy;
+    selectedIndices.clear();
+    selectionAnchor = null;
+    nameCtrl.text = copy.name;
+    _save();
+    setState(() {});
+  }
+
+  Future<void> _exportJson(List<MacroDef> list, {String? label}) async {
+    final path = engine?.pickFile(save: true);
+    if (path == null || path.isEmpty) return;
+    await File(path).writeAsString(libraryJson(list));
+    setState(() => status = 'Exported ${label ?? '${list.length} macros'}');
+  }
+
+  Future<void> _importJson() async {
+    final path = engine?.pickFile(save: false);
+    if (path == null || path.isEmpty) return;
+    try {
+      final incoming = parseLibrary(await File(path).readAsString());
+      for (final m in incoming) {
+        final copy = m.duplicate();
+        copy.name = m.name;
+        macros.add(copy);
+      }
+      selected ??= macros.isEmpty ? null : macros.last;
+      nameCtrl.text = selected?.name ?? '';
+      _save();
+      setState(() => status = 'Imported ${incoming.length} macros');
+    } catch (_) {
+      setState(() => status = 'Import failed');
+    }
+  }
+
+  Future<void> _copyMacroJson(MacroDef m) async {
+    await Clipboard.setData(ClipboardData(text: libraryJson([m])));
+    setState(() => status = 'Copied ${m.name} JSON');
+  }
+
+  Future<void> _showKeybinds() async {
+    _hotkeysPaused = true;
+    await showKeybindsDialog(
+      context: context,
+      engine: engine,
+      settings: settings,
+      macro: selected,
+      onChanged: () {
+        _applyEngineSettings();
+        _save();
+        setState(() {});
+      },
+    );
+    _hotkeysPaused = false;
+    _applyEngineSettings();
+  }
+
+  Future<void> _showSettings() async {
+    _hotkeysPaused = true;
+    await showAppSettingsDialog(
+      context: context,
+      engine: engine,
+      settings: settings,
+      onExportLibrary: () => _exportJson(macros, label: 'library'),
+      onImportLibrary: _importJson,
+      onChanged: () {
+        _applyEngineSettings();
+        setState(() {});
+      },
+    );
+    _hotkeysPaused = false;
+    _applyEngineSettings();
+  }
+
+  Future<void> _macroCardMenu(Offset pos, MacroDef m) async {
+    final choice = await showAppMenu<String>(
+      context: context,
+      position: pos,
+      items: const [
+        MenuChoice('export', 'Export as JSON'),
+        MenuChoice('copy', 'Copy JSON'),
+        MenuChoice('dup', 'Duplicate'),
+        MenuChoice('delete', 'Delete'),
+      ],
+    );
+    if (choice == null) return;
+    switch (choice) {
+      case 'export':
+        await _exportJson([m], label: m.name);
+      case 'copy':
+        await _copyMacroJson(m);
+      case 'dup':
+        _duplicateMacro(m);
+      case 'delete':
+        _deleteMacro(m);
+    }
+  }
+
   void _toggleRecord({int? insertAt}) {
     final e = engine;
     final m = selected;
@@ -416,7 +694,7 @@ class _DashboardPageState extends State<DashboardPage> {
     recording = true;
     final where = insertAt == null ? '' : ' · insert at ${(insertAt + 1).toString().padLeft(2, '0')}';
     final prefix = keepDelays ? 'Recording (delays on)' : 'Recording (delays off)';
-    status = '$prefix$where  F9 stop';
+    status = '$prefix$where  ${bindLabel(settings.recordVk, settings.recordMods)} stop';
     _poll = Timer.periodic(const Duration(milliseconds: 16), (_) {
       _ingestRecorded(m);
       setState(() {});
@@ -488,6 +766,7 @@ class _DashboardPageState extends State<DashboardPage> {
                 AppHeader(
                   engine: engine,
                   recording: recording,
+                  recordLabel: bindLabel(settings.recordVk, settings.recordMods),
                   onRecord: () => _toggleRecord(),
                   onStartAll: () {
                     for (final m in macros.where((e) => e.enabled)) {
@@ -498,11 +777,16 @@ class _DashboardPageState extends State<DashboardPage> {
                     for (final m in macros) {
                       if (m.nativeId != 0) engine?.pause(m.nativeId);
                     }
+                    _cue(1);
                   },
                   onStopAll: () {
                     engine?.stopAll();
+                    _holdOn.clear();
+                    _cue(2);
                     setState(() => status = 'Stopped');
                   },
+                  onKeybinds: _showKeybinds,
+                  onSettings: _showSettings,
                   onInfo: _startTutorial,
                   headerKey: headerKey,
                   recordKey: recordKey,
@@ -541,6 +825,11 @@ class _DashboardPageState extends State<DashboardPage> {
                   const Text('Macros', style: TextStyle(fontWeight: FontWeight.w600)),
                   const Spacer(),
                   IconButton(
+                    tooltip: 'Import JSON',
+                    onPressed: _importJson,
+                    icon: Icon(Icons.file_upload_outlined, color: c.accent),
+                  ),
+                  IconButton(
                     tooltip: 'Add macro',
                     onPressed: () {
                       final m = MacroDef(name: 'Macro ${macros.length + 1}');
@@ -565,7 +854,9 @@ class _DashboardPageState extends State<DashboardPage> {
                 itemBuilder: (context, i) {
                   final m = macros[i];
                   final on = selected?.id == m.id;
-                  return InkWell(
+                  return GestureDetector(
+                    onSecondaryTapDown: (d) => _macroCardMenu(d.globalPosition, m),
+                    child: InkWell(
                     onTap: () => setState(() {
                       selected = m;
                       selectedIndices.clear();
@@ -610,6 +901,30 @@ class _DashboardPageState extends State<DashboardPage> {
                               ],
                             ),
                           ),
+                          const SizedBox(width: 6),
+                          for (var t = 1; t < tagColors.length; t++)
+                            Padding(
+                              padding: const EdgeInsets.only(right: 4),
+                              child: GestureDetector(
+                                onTap: () {
+                                  m.tag = m.tag == t ? 0 : t;
+                                  _save();
+                                  setState(() {});
+                                },
+                                child: Container(
+                                  width: 10,
+                                  height: 10,
+                                  decoration: BoxDecoration(
+                                    color: Color(tagColors[t]),
+                                    shape: BoxShape.circle,
+                                    border: Border.all(
+                                      color: m.tag == t ? c.text : Colors.transparent,
+                                      width: 2,
+                                    ),
+                                  ),
+                                ),
+                              ),
+                            ),
                           IconButton(
                             tooltip: 'Delete macro',
                             visualDensity: VisualDensity.compact,
@@ -618,6 +933,7 @@ class _DashboardPageState extends State<DashboardPage> {
                           ),
                         ],
                       ),
+                    ),
                     ),
                   );
                 },
@@ -691,22 +1007,26 @@ class _DashboardPageState extends State<DashboardPage> {
                   ),
                 ),
               ),
-              const SizedBox(width: 16),
+              const SizedBox(width: 8),
               KeyedSubtree(
                 key: startKey,
                 child: FilledButton(
                   onPressed: _togglePlay,
-                  child: Text((m.state == 1 || m.state == 2) ? 'Stop (F6)' : 'Start (F6)'),
+                  child: Text(
+                    (m.state == 1 || m.state == 2)
+                        ? 'Stop (${bindLabel(m.playVk > 0 ? m.playVk : settings.playVk, m.playVk > 0 ? m.playMods : settings.playMods)})'
+                        : 'Start (${bindLabel(m.playVk > 0 ? m.playVk : settings.playVk, m.playVk > 0 ? m.playMods : settings.playMods)})',
+                  ),
                 ),
               ),
               const SizedBox(width: 8),
-              _ghost('Pause', () {
-                if (m.nativeId != 0) engine?.pause(m.nativeId);
-              }),
-              _ghost('Stop', () {
-                if (m.nativeId != 0) engine?.stop(m.nativeId);
-                setState(() => status = 'Stopped');
-              }, color: c.danger),
+              FilledButton.tonal(
+                onPressed: () => _playOnce(m),
+                child: Text('Run once (${bindLabel(settings.onceVk, settings.onceMods)})'),
+              ),
+              const SizedBox(width: 8),
+              _ghost('Pause', () => _pauseMacro(m)),
+              _ghost('Stop', () => _stopMacro(m), color: c.danger),
             ],
           ),
           const SizedBox(height: 12),
@@ -729,6 +1049,24 @@ class _DashboardPageState extends State<DashboardPage> {
                 onPicked: (int v) {
                   m.loopMode = v;
                   m.timeLimit = v == 2;
+                  _save();
+                  setState(() {});
+                },
+              ),
+              _menuChip(
+                label: 'Trigger',
+                value: m.triggerMode == 1
+                    ? 'Hold'
+                    : m.triggerMode == 2
+                        ? 'Once'
+                        : 'Toggle',
+                items: const [
+                  MenuChoice(0, 'Toggle'),
+                  MenuChoice(1, 'Hold down'),
+                  MenuChoice(2, 'Run once'),
+                ],
+                onPicked: (int v) {
+                  m.triggerMode = v;
                   _save();
                   setState(() {});
                 },
@@ -825,6 +1163,15 @@ class _DashboardPageState extends State<DashboardPage> {
           ),
           const SizedBox(height: 16),
           Row(
+            children: [
+              _editorTabBtn('Sequence', 0),
+              const SizedBox(width: 8),
+              _editorTabBtn('Keybinds', 1),
+            ],
+          ),
+          const SizedBox(height: 12),
+          if (_editorTab == 1) _macroKeybinds(m) else ...[
+          Row(
             key: sequenceKey,
             children: [
               const Text('Sequence', style: TextStyle(fontWeight: FontWeight.w600, fontSize: 16)),
@@ -848,13 +1195,87 @@ class _DashboardPageState extends State<DashboardPage> {
                 selectionAnchor = m.steps.isEmpty ? null : 0;
                 setState(() {});
               }),
+              _ghost('Duplicate', _duplicateSelected),
+              _ghost('Move left', () => _nudgeSelected(-1)),
+              _ghost('Move right', () => _nudgeSelected(1)),
               _ghost('Delete', _deleteSelected, color: c.danger),
             ],
           ),
           const SizedBox(height: 12),
           _sequenceBoard(m),
+          ],
         ],
       ),
+    );
+  }
+
+  Widget _editorTabBtn(String label, int index) {
+    final on = _editorTab == index;
+    return TextButton(
+      onPressed: () => setState(() => _editorTab = index),
+      style: TextButton.styleFrom(
+        backgroundColor: on ? c.accentDim : Colors.transparent,
+        foregroundColor: on ? c.accent : c.muted,
+      ),
+      child: Text(label),
+    );
+  }
+
+  Widget _macroKeybinds(MacroDef m) {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Text('Per-macro binds. Empty means the global Keybinds tab is used.',
+            style: TextStyle(color: c.muted, fontSize: 12)),
+        const SizedBox(height: 12),
+        BindCaptureTile(
+          label: 'Start',
+          vk: m.playVk,
+          mods: m.playMods,
+          engine: engine,
+          allowClear: true,
+          onChanged: (vk, mods) {
+            m.playVk = vk;
+            m.playMods = mods;
+            _syncBindEdges();
+            _save();
+            setState(() {});
+          },
+        ),
+        BindCaptureTile(
+          label: 'Pause',
+          vk: m.pauseVk,
+          mods: m.pauseMods,
+          engine: engine,
+          allowClear: true,
+          onChanged: (vk, mods) {
+            m.pauseVk = vk;
+            m.pauseMods = mods;
+            _syncBindEdges();
+            _save();
+            setState(() {});
+          },
+        ),
+        BindCaptureTile(
+          label: 'Stop',
+          vk: m.stopVk,
+          mods: m.stopMods,
+          engine: engine,
+          allowClear: true,
+          onChanged: (vk, mods) {
+            m.stopVk = vk;
+            m.stopMods = mods;
+            _syncBindEdges();
+            _save();
+            setState(() {});
+          },
+        ),
+        const SizedBox(height: 8),
+        TextButton(
+          onPressed: _showKeybinds,
+          child: Text('Open keybinds dialog', style: TextStyle(color: c.accent)),
+        ),
+      ],
     );
   }
 
@@ -1117,6 +1538,8 @@ class _DashboardPageState extends State<DashboardPage> {
           MenuChoice('text', 'Type ASCII / text…'),
           MenuChoice('key', 'Keyboard tap…'),
           MenuChoice('click', 'Mouse click at X,Y…'),
+          MenuChoice('wheel', 'Mouse wheel…'),
+          MenuChoice('drag', 'Click-and-drag…'),
           MenuChoice('lclick', 'Left click (cursor)'),
           MenuChoice('rclick', 'Right click (cursor)'),
           MenuChoice('delay', 'Wait…'),
@@ -1150,6 +1573,12 @@ class _DashboardPageState extends State<DashboardPage> {
             _insert(MacroStep(kind: 1, code: 0, down: false, x: cap.x, y: cap.y));
             return;
           }
+        case 'wheel':
+          final wheel = await _promptWheel();
+          if (wheel != null) step = wheel;
+        case 'drag':
+          final drag = await _promptDrag();
+          if (drag != null) step = drag;
         case 'lclick':
           _insert(MacroStep(kind: 1, code: 0, down: true));
           _insert(MacroStep(kind: 1, code: 0, down: false));
@@ -1318,6 +1747,20 @@ class _DashboardPageState extends State<DashboardPage> {
     );
   }
 
+  Future<MacroStep?> _promptWheel() async {
+    return showDialog<MacroStep>(
+      context: context,
+      builder: (ctx) => _WheelDialog(engine: engine),
+    );
+  }
+
+  Future<MacroStep?> _promptDrag() async {
+    return showDialog<MacroStep>(
+      context: context,
+      builder: (ctx) => _DragDialog(engine: engine),
+    );
+  }
+
   Future<String?> _prompt(String title, String initial) async {
     final ctrl = TextEditingController(text: initial);
     return showDialog<String>(
@@ -1380,6 +1823,31 @@ class _ClickXyDialogState extends State<_ClickXyDialog> {
     super.dispose();
   }
 
+  void _startClickPick() {
+    if (widget.engine == null) {
+      setState(() => hint = 'Native engine is offline.');
+      return;
+    }
+    _poll?.cancel();
+    setState(() {
+      capturing = true;
+      armed = false;
+      hint = 'Click the target window.';
+    });
+    _poll = Timer.periodic(const Duration(milliseconds: 16), (_) {
+      final e = widget.engine;
+      if (e == null || !capturing) return;
+      if (!armed) {
+        if (!e.keyDown(0x01)) armed = true;
+        return;
+      }
+      if (!e.keyDown(0x01)) return;
+      final win = e.windowAtCursor();
+      if (win != null && win.process.toLowerCase() == 'macrorelay') return;
+      _finishCapture(e, win);
+    });
+  }
+
   void _startCapture() {
     if (widget.engine == null) {
       setState(() => hint = 'Native engine is offline.');
@@ -1401,24 +1869,26 @@ class _ClickXyDialogState extends State<_ClickXyDialog> {
       }
       if (!armed) return;
       final win = e.windowAtCursor();
-      if (win != null && win.process.toLowerCase() == 'macrorelay') {
-        return;
-      }
-      _poll?.cancel();
-      capturing = false;
-      final pos = e.cursorClient();
-      if (pos == null || !mounted) {
-        setState(() {
-          capturing = false;
-          hint = 'Could not read that window. Try again.';
-        });
-        return;
-      }
-      Navigator.pop(
-        context,
-        _CapturedClick(pos.x, pos.y, process: win?.process ?? '', title: win?.title ?? ''),
-      );
+      if (win != null && win.process.toLowerCase() == 'macrorelay') return;
+      _finishCapture(e, win);
     });
+  }
+
+  void _finishCapture(NativeEngine e, ({String process, String title, int pid})? win) {
+    _poll?.cancel();
+    capturing = false;
+    final pos = e.cursorClient();
+    if (pos == null || !mounted) {
+      setState(() {
+        capturing = false;
+        hint = 'Could not read that window. Try again.';
+      });
+      return;
+    }
+    Navigator.pop(
+      context,
+      _CapturedClick(pos.x, pos.y, process: win?.process ?? '', title: win?.title ?? ''),
+    );
   }
 
   _CapturedClick? _fromTyped() {
@@ -1445,7 +1915,14 @@ class _ClickXyDialogState extends State<_ClickXyDialog> {
             TextField(
               controller: _ctrl,
               autofocus: true,
-              decoration: const InputDecoration(hintText: '120,80'),
+              decoration: InputDecoration(
+                hintText: '120,80',
+                suffixIcon: IconButton(
+                  tooltip: 'Click a point in the target window',
+                  onPressed: capturing ? null : _startClickPick,
+                  icon: Icon(Icons.center_focus_strong, color: c.accent),
+                ),
+              ),
             ),
             const SizedBox(height: 16),
             InkWell(
@@ -1490,6 +1967,212 @@ class _ClickXyDialogState extends State<_ClickXyDialog> {
           onPressed: () {
             final v = _fromTyped();
             if (v != null) Navigator.pop(context, v);
+          },
+          child: const Text('Insert'),
+        ),
+      ],
+    );
+  }
+}
+
+({int x, int y})? _parseXy(String text) {
+  final parts = text.split(',');
+  if (parts.length != 2) return null;
+  final x = int.tryParse(parts[0].trim());
+  final y = int.tryParse(parts[1].trim());
+  if (x == null || y == null) return null;
+  return (x: x, y: y);
+}
+
+class _XyPickField extends StatefulWidget {
+  const _XyPickField({required this.controller, required this.engine, this.label = 'X,Y'});
+  final TextEditingController controller;
+  final NativeEngine? engine;
+  final String label;
+
+  @override
+  State<_XyPickField> createState() => _XyPickFieldState();
+}
+
+class _XyPickFieldState extends State<_XyPickField> {
+  Timer? _poll;
+  bool capturing = false;
+
+  @override
+  void dispose() {
+    _poll?.cancel();
+    super.dispose();
+  }
+
+  void _pick() {
+    final e = widget.engine;
+    if (e == null) return;
+    _poll?.cancel();
+    setState(() => capturing = true);
+    var armed = false;
+    _poll = Timer.periodic(const Duration(milliseconds: 16), (_) {
+      if (!capturing) return;
+      if (!armed) {
+        if (!e.keyDown(0x01)) armed = true;
+        return;
+      }
+      if (!e.keyDown(0x01)) return;
+      final win = e.windowAtCursor();
+      if (win != null && win.process.toLowerCase() == 'macrorelay') return;
+      final pos = e.cursorClient();
+      if (pos == null) return;
+      widget.controller.text = '${pos.x},${pos.y}';
+      _poll?.cancel();
+      if (mounted) setState(() => capturing = false);
+    });
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final p = AppTheme.of(context);
+    return TextField(
+      controller: widget.controller,
+      decoration: InputDecoration(
+        labelText: capturing ? 'Click the target window…' : widget.label,
+        suffixIcon: IconButton(
+          tooltip: 'Pick on screen',
+          onPressed: capturing ? null : _pick,
+          icon: Icon(Icons.center_focus_strong, color: p.accent),
+        ),
+      ),
+    );
+  }
+}
+
+class _WheelDialog extends StatefulWidget {
+  const _WheelDialog({this.engine});
+  final NativeEngine? engine;
+
+  @override
+  State<_WheelDialog> createState() => _WheelDialogState();
+}
+
+class _WheelDialogState extends State<_WheelDialog> {
+  bool up = true;
+  final xy = TextEditingController();
+
+  @override
+  void dispose() {
+    xy.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final p = AppTheme.of(context);
+    return AlertDialog(
+      backgroundColor: p.card,
+      title: const Text('Mouse wheel'),
+      content: SizedBox(
+        width: 360,
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Row(
+              children: [
+                ChoiceChip(
+                  label: const Text('Up'),
+                  selected: up,
+                  onSelected: (_) => setState(() => up = true),
+                ),
+                const SizedBox(width: 8),
+                ChoiceChip(
+                  label: const Text('Down'),
+                  selected: !up,
+                  onSelected: (_) => setState(() => up = false),
+                ),
+              ],
+            ),
+            const SizedBox(height: 12),
+            _XyPickField(controller: xy, engine: widget.engine, label: 'X,Y (optional)'),
+          ],
+        ),
+      ),
+      actions: [
+        TextButton(onPressed: () => Navigator.pop(context), child: const Text('Cancel')),
+        FilledButton(
+          onPressed: () {
+            final pos = _parseXy(xy.text);
+            Navigator.pop(
+              context,
+              MacroStep(kind: 4, code: up ? 120 : -120, x: pos?.x, y: pos?.y),
+            );
+          },
+          child: const Text('Insert'),
+        ),
+      ],
+    );
+  }
+}
+
+class _DragDialog extends StatefulWidget {
+  const _DragDialog({this.engine});
+  final NativeEngine? engine;
+
+  @override
+  State<_DragDialog> createState() => _DragDialogState();
+}
+
+class _DragDialogState extends State<_DragDialog> {
+  final from = TextEditingController(text: '0,0');
+  final to = TextEditingController(text: '100,100');
+  int button = 0;
+
+  @override
+  void dispose() {
+    from.dispose();
+    to.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final p = AppTheme.of(context);
+    return AlertDialog(
+      backgroundColor: p.card,
+      title: const Text('Click-and-drag'),
+      content: SizedBox(
+        width: 360,
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Align(
+              alignment: Alignment.centerLeft,
+              child: Wrap(
+                spacing: 8,
+                children: [
+                  for (final item in const [(0, 'Left'), (1, 'Right'), (2, 'Middle')])
+                    ChoiceChip(
+                      label: Text(item.$2),
+                      selected: button == item.$1,
+                      onSelected: (_) => setState(() => button = item.$1),
+                    ),
+                ],
+              ),
+            ),
+            const SizedBox(height: 12),
+            _XyPickField(controller: from, engine: widget.engine, label: 'From X,Y'),
+            const SizedBox(height: 12),
+            _XyPickField(controller: to, engine: widget.engine, label: 'To X,Y'),
+          ],
+        ),
+      ),
+      actions: [
+        TextButton(onPressed: () => Navigator.pop(context), child: const Text('Cancel')),
+        FilledButton(
+          onPressed: () {
+            final a = _parseXy(from.text);
+            final b = _parseXy(to.text);
+            if (a == null || b == null) return;
+            Navigator.pop(
+              context,
+              MacroStep(kind: 5, code: button, x: a.x, y: a.y, x2: b.x, y2: b.y),
+            );
           },
           child: const Text('Insert'),
         ),

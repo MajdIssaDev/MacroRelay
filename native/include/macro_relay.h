@@ -24,7 +24,9 @@ enum MrKind {
   MR_KIND_KEY = 0,
   MR_KIND_MOUSE = 1,
   MR_KIND_DELAY = 2,
-  MR_KIND_TEXT = 3
+  MR_KIND_TEXT = 3,
+  MR_KIND_WHEEL = 4,
+  MR_KIND_DRAG = 5
 };
 
 enum MrMouseButton {
@@ -38,7 +40,8 @@ enum MrMouseButton {
 enum MrLoopMode {
   MR_LOOP_INFINITE = 0,
   MR_LOOP_COUNT = 1,
-  MR_LOOP_DURATION = 2
+  MR_LOOP_DURATION = 2,
+  MR_LOOP_ONCE = 3
 };
 
 enum MrFocusMode {
@@ -76,6 +79,9 @@ MR_API void mr_session_add_mouse(int32_t id, int32_t button, int32_t down, int32
                                  int32_t has_pos);
 MR_API void mr_session_add_delay(int32_t id, int32_t delay_ms);
 MR_API void mr_session_add_text(int32_t id, const char* utf8);
+MR_API void mr_session_add_wheel(int32_t id, int32_t delta, int32_t x, int32_t y, int32_t has_pos);
+MR_API void mr_session_add_drag(int32_t id, int32_t button, int32_t x1, int32_t y1, int32_t x2,
+                                int32_t y2);
 
 MR_API int32_t mr_session_start(int32_t id);
 MR_API void mr_session_pause(int32_t id);
@@ -90,6 +96,15 @@ MR_API int32_t mr_cursor_client(const char* process_utf8, const char* title_utf8
                                 int32_t* x, int32_t* y);
 MR_API int32_t mr_ctrl_shift_down(void);
 MR_API int32_t mr_hotkey_poll(int32_t* play_toggle, int32_t* record_toggle);
+MR_API void mr_hotkey_set(int32_t play_vk, int32_t once_vk, int32_t record_vk, int32_t panic_vk);
+MR_API int32_t mr_key_down(int32_t vk);
+MR_API int32_t mr_any_key_down(void);
+MR_API void mr_beep(int32_t kind);
+MR_API int32_t mr_pick_file(int32_t save, char* out, int32_t out_len);
+MR_API int32_t mr_startup_get(void);
+MR_API int32_t mr_startup_set(int32_t enable);
+MR_API int32_t mr_tray_set(int32_t enable);
+MR_API void mr_close_to_tray(int32_t enable);
 MR_API int32_t mr_window_command(int32_t cmd);
 
 #ifdef __cplusplus
