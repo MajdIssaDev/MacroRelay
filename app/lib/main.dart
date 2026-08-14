@@ -83,8 +83,11 @@ class _DashboardPageState extends State<DashboardPage> {
   Timer? _stateTimer;
   final sequenceFocus = FocusNode();
   final nameFocus = FocusNode();
+  final delayEditFocus = FocusNode();
   late final TextEditingController nameCtrl;
+  late final TextEditingController delayEditCtrl;
   bool editingName = false;
+  int? _editingDelayAt;
   bool _globalPlayWas = false;
   bool _globalOnceWas = false;
   bool _recordWas = false;
@@ -112,8 +115,12 @@ class _DashboardPageState extends State<DashboardPage> {
   void initState() {
     super.initState();
     nameCtrl = TextEditingController();
+    delayEditCtrl = TextEditingController();
     nameFocus.addListener(() {
       if (!nameFocus.hasFocus && editingName) _commitName();
+    });
+    delayEditFocus.addListener(() {
+      if (!delayEditFocus.hasFocus && _editingDelayAt != null) _commitDelayEdit();
     });
     _load();
     _stateTimer = Timer.periodic(const Duration(milliseconds: 50), (_) {
@@ -129,7 +136,9 @@ class _DashboardPageState extends State<DashboardPage> {
     _stateTimer?.cancel();
     sequenceFocus.dispose();
     nameFocus.dispose();
+    delayEditFocus.dispose();
     nameCtrl.dispose();
+    delayEditCtrl.dispose();
     engine?.stopAll();
     super.dispose();
   }
@@ -205,6 +214,44 @@ class _DashboardPageState extends State<DashboardPage> {
     setState(() {});
   }
 
+  void _commitDelayEdit() {
+    final m = selected;
+    final i = _editingDelayAt;
+    _editingDelayAt = null;
+    if (m == null || i == null || i < 0 || i >= m.steps.length) {
+      setState(() {});
+      return;
+    }
+    final step = m.steps[i];
+    if (step.kind != 2) {
+      setState(() {});
+      return;
+    }
+    final ms = int.tryParse(delayEditCtrl.text.trim());
+    if (ms != null && ms >= 0 && ms != step.delayMs) {
+      step.delayMs = ms;
+      _save();
+    }
+    setState(() {});
+  }
+
+  void _startDelayEdit(MacroDef m, int i) {
+    if (recording) return;
+    final step = m.steps[i];
+    if (step.kind != 2) return;
+    _commitDelayEdit();
+    selectedIndices
+      ..clear()
+      ..add(i);
+    selectionAnchor = i;
+    delayEditCtrl.text = '${step.delayMs}';
+    setState(() => _editingDelayAt = i);
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      delayEditFocus.requestFocus();
+      delayEditCtrl.selection = TextSelection(baseOffset: 0, extentOffset: delayEditCtrl.text.length);
+    });
+  }
+
   void _startTutorial() {
     showTutorial(context, [
       TutorialStep(
@@ -254,7 +301,7 @@ class _DashboardPageState extends State<DashboardPage> {
       ),
       TutorialStep(
         title: 'Sequence',
-        body: 'Click a square to select it. Ctrl+click adds more, Shift+click selects the range. Hold a square to drag the selection. Duplicate clones the selection. Move left / Move right shifts the selected steps. Right-click an arrow or the + slot to insert or record there.',
+        body: 'Click a square to select it. Ctrl+click adds more, Shift+click selects the range. Double-click a delay step to edit milliseconds. Hold a square to drag the selection. Duplicate clones the selection. Move left / Move right shifts the selected steps. Right-click an arrow or the + slot to insert or record there.',
         anchor: sequenceKey,
       ),
       TutorialStep(
@@ -493,6 +540,7 @@ class _DashboardPageState extends State<DashboardPage> {
   }
 
   void _selectIndex(int i, {required bool ctrl, required bool shift}) {
+    _commitDelayEdit();
     sequenceFocus.requestFocus();
     if (shift && selectionAnchor != null) {
       final from = math.min(selectionAnchor!, i);
@@ -1378,6 +1426,7 @@ class _DashboardPageState extends State<DashboardPage> {
         behavior: HitTestBehavior.opaque,
         onTap: () {
           if (_reordering) return;
+          _commitDelayEdit();
           sequenceFocus.requestFocus();
           if (selectedIndices.isEmpty) return;
           selectedIndices.clear();
@@ -1598,6 +1647,7 @@ class _DashboardPageState extends State<DashboardPage> {
   Widget _stepFace(MacroDef m, int i) {
     final step = m.steps[i];
     final on = selectedIndices.contains(i);
+    final editingDelay = step.kind == 2 && _editingDelayAt == i;
     final parts = step.shortLabel.split('\n');
     final glyph = parts.first;
     final detail = parts.length > 1 ? parts.sublist(1).join('\n') : '';
@@ -1619,31 +1669,51 @@ class _DashboardPageState extends State<DashboardPage> {
           ),
           Expanded(
             child: Center(
-              child: Column(
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  Text(
-                    glyph,
-                    textAlign: TextAlign.center,
-                    maxLines: 1,
-                    overflow: TextOverflow.ellipsis,
-                    style: TextStyle(
-                      fontSize: 22,
-                      fontWeight: FontWeight.w700,
-                      height: 1.1,
-                      color: step.enabled ? c.text : c.muted,
-                    ),
-                  ),
-                  if (detail.isNotEmpty)
-                    Text(
-                      detail,
+              child: editingDelay
+                  ? TextField(
+                      controller: delayEditCtrl,
+                      focusNode: delayEditFocus,
+                      keyboardType: TextInputType.number,
                       textAlign: TextAlign.center,
-                      maxLines: 2,
-                      overflow: TextOverflow.ellipsis,
-                      style: TextStyle(fontSize: 11, color: c.muted, height: 1.2),
+                      style: TextStyle(
+                        fontSize: 20,
+                        fontWeight: FontWeight.w700,
+                        color: c.text,
+                      ),
+                      decoration: InputDecoration(
+                        isDense: true,
+                        border: InputBorder.none,
+                        suffixText: 'ms',
+                        suffixStyle: TextStyle(color: c.muted, fontSize: 12),
+                        contentPadding: EdgeInsets.zero,
+                      ),
+                      onSubmitted: (_) => _commitDelayEdit(),
+                    )
+                  : Column(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        Text(
+                          glyph,
+                          textAlign: TextAlign.center,
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                          style: TextStyle(
+                            fontSize: 22,
+                            fontWeight: FontWeight.w700,
+                            height: 1.1,
+                            color: step.enabled ? c.text : c.muted,
+                          ),
+                        ),
+                        if (detail.isNotEmpty)
+                          Text(
+                            detail,
+                            textAlign: TextAlign.center,
+                            maxLines: 2,
+                            overflow: TextOverflow.ellipsis,
+                            style: TextStyle(fontSize: 11, color: c.muted, height: 1.2),
+                          ),
+                      ],
                     ),
-                ],
-              ),
             ),
           ),
         ],
@@ -1713,13 +1783,18 @@ class _DashboardPageState extends State<DashboardPage> {
         onAcceptWithDetails: (_) => _moveSelectedTo(i),
         builder: (context, cand, _) {
           final hot = cand.isNotEmpty;
+          final step = m.steps[i];
+          final tooltip = step.kind == 2
+              ? '${step.label}\nDouble-click to edit delay · Click to select · Ctrl/Shift · hold to drag'
+              : '${step.label}\nClick to select · Ctrl/Shift · hold to drag';
           return Tooltip(
-            message: '${m.steps[i].label}\nClick to select · Ctrl/Shift · hold to drag',
+            message: tooltip,
             child: GestureDetector(
               onTap: () {
                 final keys = HardwareKeyboard.instance;
                 _selectIndex(i, ctrl: keys.isControlPressed, shift: keys.isShiftPressed);
               },
+              onDoubleTap: step.kind == 2 ? () => _startDelayEdit(m, i) : null,
               onSecondaryTapDown: (d) => _showGapMenu(d.globalPosition, i + 1),
               child: DecoratedBox(
                 decoration: BoxDecoration(
