@@ -36,6 +36,10 @@ typedef _OptionsD = void Function(
     int, int, double, int, int, int, int, int);
 typedef _TargetC = Void Function(Int32, Pointer<Utf8>, Pointer<Utf8>);
 typedef _TargetD = void Function(int, Pointer<Utf8>, Pointer<Utf8>);
+typedef _InputModeC = Void Function(Int32, Int32);
+typedef _InputModeD = void Function(int, int);
+typedef _NeedsAdminC = Int32 Function(Pointer<Utf8>, Pointer<Utf8>);
+typedef _NeedsAdminD = int Function(Pointer<Utf8>, Pointer<Utf8>);
 typedef _AddKeyC = Void Function(Int32, Int32, Int32);
 typedef _AddKeyD = void Function(int, int, int);
 typedef _AddMouseC = Void Function(Int32, Int32, Int32, Int32, Int32, Int32);
@@ -96,6 +100,7 @@ class NativeEngine {
         _destroy = lib.lookupFunction<_IdC, _IdD>('mr_session_destroy'),
         _clear = lib.lookupFunction<_IdC, _IdD>('mr_session_clear_steps'),
         _options = lib.lookupFunction<_OptionsC, _OptionsD>('mr_session_set_options'),
+        _inputMode = lib.lookupFunction<_InputModeC, _InputModeD>('mr_session_set_input_mode'),
         _target = lib.lookupFunction<_TargetC, _TargetD>('mr_session_set_target'),
         _addKey = lib.lookupFunction<_AddKeyC, _AddKeyD>('mr_session_add_key'),
         _addMouse = lib.lookupFunction<_AddMouseC, _AddMouseD>('mr_session_add_mouse'),
@@ -111,6 +116,8 @@ class NativeEngine {
         _running = lib.lookupFunction<_CountC, _CountD>('mr_running_count'),
         _window = lib.lookupFunction<_WindowC, _WindowD>('mr_window_at_cursor'),
         _cursor = lib.lookupFunction<_CursorC, _CursorD>('mr_cursor_client'),
+        _needsAdmin = lib.lookupFunction<_NeedsAdminC, _NeedsAdminD>('mr_target_needs_admin'),
+        _lastInput = lib.lookupFunction<_FlagC, _FlagD>('mr_last_input_status'),
         _ctrlShift = lib.lookupFunction<_FlagC, _FlagD>('mr_ctrl_shift_down'),
         _hotkeys = lib.lookupFunction<_HotkeyC, _HotkeyD>('mr_hotkey_poll'),
         _hotkeySet = lib.lookupFunction<_HotkeySetC, _HotkeySetD>('mr_hotkey_set'),
@@ -131,6 +138,7 @@ class NativeEngine {
   final _IdD _destroy;
   final _IdD _clear;
   final _OptionsD _options;
+  final _InputModeD _inputMode;
   final _TargetD _target;
   final _AddKeyD _addKey;
   final _AddMouseD _addMouse;
@@ -146,6 +154,8 @@ class NativeEngine {
   final _CountD _running;
   final _WindowD _window;
   final _CursorD _cursor;
+  final _NeedsAdminD _needsAdmin;
+  final _FlagD _lastInput;
   final _FlagD _ctrlShift;
   final _HotkeyD _hotkeys;
   final _HotkeySetD _hotkeySet;
@@ -211,6 +221,8 @@ class NativeEngine {
     malloc.free(t);
   }
 
+  void setInputMode(int id, int mode) => _inputMode(id, mode);
+
   void addKey(int id, int vk, bool down) => _addKey(id, vk, down ? 1 : 0);
   void addMouse(int id, int button, bool down, {int? x, int? y}) =>
       _addMouse(id, button, down ? 1 : 0, x ?? 0, y ?? 0, (x != null && y != null) ? 1 : 0);
@@ -261,6 +273,18 @@ class NativeEngine {
     calloc.free(y);
     return result;
   }
+
+  bool targetNeedsAdmin({String process = '', String title = ''}) {
+    final p = process.toNativeUtf8();
+    final t = title.toNativeUtf8();
+    final ok = _needsAdmin(p, t) != 0;
+    malloc.free(p);
+    malloc.free(t);
+    return ok;
+  }
+
+  /// 0 ok, 1 UIPI / elevation blocked, 2 other failure.
+  int lastInputStatus() => _lastInput();
 
   bool ctrlShiftDown() => _ctrlShift() != 0;
 

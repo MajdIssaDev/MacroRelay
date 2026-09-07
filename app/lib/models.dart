@@ -130,6 +130,7 @@ class MacroDef {
     this.durationMs = 10000,
     this.timeLimit = false,
     this.focusTarget = false,
+    this.inputMode = 2,
     this.process = '',
     this.title = '',
     this.triggerMode = 0,
@@ -154,6 +155,8 @@ class MacroDef {
   int durationMs;
   bool timeLimit;
   bool focusTarget;
+  /// 0 silent PostMessage, 1 snap-back SendInput, 2 auto
+  int inputMode;
   String process;
   String title;
   /// 0 toggle, 1 hold, 2 run once
@@ -174,7 +177,12 @@ class MacroDef {
     if (process.isNotEmpty) bits.add(process);
     if (title.isNotEmpty) bits.add('"$title"');
     final name = bits.isEmpty ? 'picked window' : bits.join(' · ');
-    return 'Sends to $name without stealing focus';
+    final mode = inputMode == 1
+        ? 'snap-back'
+        : inputMode == 0
+            ? 'silent'
+            : 'auto';
+    return 'Sends to $name without stealing focus · click mode $mode';
   }
 
   Map<String, dynamic> toJson() => {
@@ -189,6 +197,7 @@ class MacroDef {
         'durationMs': durationMs,
         'timeLimit': timeLimit,
         'focusTarget': focusTarget,
+        'inputMode': inputMode,
         'process': process,
         'title': title,
         'triggerMode': triggerMode,
@@ -213,6 +222,7 @@ class MacroDef {
         durationMs: json['durationMs'] as int? ?? 10000,
         timeLimit: json['timeLimit'] as bool? ?? false,
         focusTarget: json['focusTarget'] as bool? ?? false,
+        inputMode: json['inputMode'] as int? ?? 2,
         process: json['process'] as String? ?? '',
         title: json['title'] as String? ?? '',
         triggerMode: json['triggerMode'] as int? ?? 0,
@@ -238,6 +248,7 @@ class MacroDef {
         durationMs: durationMs,
         timeLimit: timeLimit,
         focusTarget: focusTarget,
+        inputMode: inputMode,
         process: process,
         title: title,
         triggerMode: triggerMode,

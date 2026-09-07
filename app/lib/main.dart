@@ -296,7 +296,7 @@ class _DashboardPageState extends State<DashboardPage> {
       ),
       TutorialStep(
         title: 'Window target',
-        body: 'Pick window sends posted keys and clicks to that app without focusing it. DirectInput games may still ignore posted messages.',
+        body: 'Pick window sends posted keys and clicks to that app without focusing it. Clicks resolve to the real child HWND under the coordinates. Use Silent, Snap-back, or Auto click mode — Snap-back is for Raw Input / DirectInput games. Elevated targets need MacroRelay as Administrator for silent mode.',
         anchor: targetKey,
       ),
       TutorialStep(
@@ -323,6 +323,11 @@ class _DashboardPageState extends State<DashboardPage> {
         m.state = s;
         changed = true;
       }
+    }
+    final inputStatus = e.lastInputStatus();
+    if (inputStatus == 1 && status != 'Target blocked by UIPI — run MacroRelay as Administrator') {
+      status = 'Target blocked by UIPI — run MacroRelay as Administrator';
+      changed = true;
     }
     if (changed) setState(() {});
   }
@@ -375,6 +380,7 @@ class _DashboardPageState extends State<DashboardPage> {
       durationMs: m.durationMs,
       focusTarget: m.focusTarget || m.process.isNotEmpty,
     );
+    e.setInputMode(m.nativeId, m.inputMode);
     e.setTarget(m.nativeId, m.process, m.title);
     for (final step in m.steps.where((s) => s.enabled)) {
       switch (step.kind) {
@@ -407,10 +413,20 @@ class _DashboardPageState extends State<DashboardPage> {
       setState(() => status = 'Add steps, or record, first.');
       return;
     }
+    final needsAdmin = (m.focusTarget || m.process.isNotEmpty) &&
+        (engine?.targetNeedsAdmin(process: m.process, title: m.title) ?? false);
+    if (needsAdmin && m.inputMode == 0) {
+      setState(() => status =
+          'Target is elevated — silent PostMessage is blocked (UIPI). Run MacroRelay as Administrator, or use Snap-back / Auto click mode.');
+    }
     _ensureNative(m, loopMode: loopMode);
     engine!.start(m.nativeId);
     _cue(0);
-    setState(() => status = loopMode == 3 ? 'Playing ${m.name} once' : 'Playing ${m.name}');
+    setState(() {
+      if (!(needsAdmin && m.inputMode == 0)) {
+        status = loopMode == 3 ? 'Playing ${m.name} once' : 'Playing ${m.name}';
+      }
+    });
   }
 
   void _playOnce(MacroDef m) {
@@ -802,7 +818,12 @@ class _DashboardPageState extends State<DashboardPage> {
       ..title = info.title
       ..focusTarget = true;
     _save();
-    setState(() => status = 'Target ${info.process} — input goes there without focusing it');
+    final elevated = e.targetNeedsAdmin(process: info.process, title: info.title);
+    setState(() {
+      status = elevated
+          ? 'Target ${info.process} is elevated — run MacroRelay as Administrator for silent clicks, or use Snap-back'
+          : 'Target ${info.process} — input goes there without focusing it';
+    });
   }
 
   @override
@@ -1185,6 +1206,7 @@ class _DashboardPageState extends State<DashboardPage> {
                 const SizedBox(height: 10),
                 Wrap(
                   spacing: 8,
+                  runSpacing: 8,
                   children: [
                     _ghost('Pick window', _pickWindow),
                     _ghost('Clear', () {
@@ -1195,12 +1217,32 @@ class _DashboardPageState extends State<DashboardPage> {
                       _save();
                       setState(() {});
                     }),
+                    _menuChip(
+                      label: 'Click mode',
+                      value: m.inputMode == 1
+                          ? 'Snap-back'
+                          : m.inputMode == 0
+                              ? 'Silent'
+                              : 'Auto',
+                      items: const [
+                        MenuChoice(0, 'Silent (PostMessage)'),
+                        MenuChoice(1, 'Snap-back (SendInput)'),
+                        MenuChoice(2, 'Auto'),
+                      ],
+                      onPicked: (int v) {
+                        m.inputMode = v;
+                        _save();
+                        setState(() {});
+                      },
+                    ),
                   ],
                 ),
                 const SizedBox(height: 8),
                 Text(
-                  'Picked windows receive posted key/click messages and stay in the background. '
-                  'You can keep using other apps. Some games ignore this (DirectInput / Raw Input).',
+                  'Silent posts to the real child window under (X,Y) with MOVE→DOWN→hold→UP. '
+                  'Snap-back briefly moves the cursor for Raw Input / DirectInput games. '
+                  'Auto uses silent first and falls back to snap-back when the target is elevated. '
+                  'If the target runs as Administrator, MacroRelay must too for silent clicks.',
                   style: TextStyle(color: c.muted, fontSize: 12, height: 1.4),
                 ),
               ],

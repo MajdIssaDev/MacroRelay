@@ -50,6 +50,12 @@ enum MrFocusMode {
   MR_FOCUS_BACKGROUND = 2
 };
 
+enum MrInputMode {
+  MR_INPUT_SILENT = 0,    /* PostMessage, no cursor / focus change */
+  MR_INPUT_SNAPBACK = 1,  /* SendInput with instant cursor snap-back */
+  MR_INPUT_AUTO = 2       /* Silent when possible; snap-back when blocked / elevated */
+};
+
 typedef struct MrEvent {
   int32_t kind;
   int32_t code;
@@ -73,6 +79,7 @@ MR_API void mr_session_set_options(int32_t id, int32_t interval_ms, double speed
                                    int32_t jitter_enabled, int32_t loop_mode,
                                    int32_t repeat_count, int32_t duration_ms,
                                    int32_t focus_mode);
+MR_API void mr_session_set_input_mode(int32_t id, int32_t input_mode);
 MR_API void mr_session_set_target(int32_t id, const char* process_utf8, const char* title_utf8);
 MR_API void mr_session_add_key(int32_t id, int32_t vk, int32_t down);
 MR_API void mr_session_add_mouse(int32_t id, int32_t button, int32_t down, int32_t x, int32_t y,
@@ -94,6 +101,10 @@ MR_API int32_t mr_window_at_cursor(char* process, int32_t process_len, char* tit
                                    int32_t title_len, int32_t* pid);
 MR_API int32_t mr_cursor_client(const char* process_utf8, const char* title_utf8,
                                 int32_t* x, int32_t* y);
+/* 1 if target process integrity is higher than ours (needs Admin). */
+MR_API int32_t mr_target_needs_admin(const char* process_utf8, const char* title_utf8);
+/* Last background-input status: 0 ok, 1 UIPI/blocked, 2 other failure. */
+MR_API int32_t mr_last_input_status(void);
 MR_API int32_t mr_ctrl_shift_down(void);
 MR_API int32_t mr_hotkey_poll(int32_t* play_toggle, int32_t* record_toggle);
 MR_API void mr_hotkey_set(int32_t play_vk, int32_t once_vk, int32_t record_vk, int32_t panic_vk);
