@@ -1225,7 +1225,7 @@ class _DashboardPageState extends State<DashboardPage> {
                               ? 'Silent'
                               : 'Auto',
                       items: const [
-                        MenuChoice(0, 'Silent (PostMessage)'),
+                        MenuChoice(0, 'Silent (SendMessage)'),
                         MenuChoice(1, 'Snap-back (SendInput)'),
                         MenuChoice(2, 'Auto'),
                       ],
@@ -1239,7 +1239,8 @@ class _DashboardPageState extends State<DashboardPage> {
                 ),
                 const SizedBox(height: 8),
                 Text(
-                  'Silent posts to the real child window under (X,Y) with MOVE→DOWN→hold→UP. '
+                  'Silent uses SendMessage to the target window (Clicador-style) — no cursor move, no focus steal. '
+                  'Works while the target is visible (not minimized). '
                   'Snap-back briefly moves the cursor for Raw Input / DirectInput games. '
                   'Auto uses silent first and falls back to snap-back when the target is elevated. '
                   'If the target runs as Administrator, MacroRelay must too for silent clicks.',

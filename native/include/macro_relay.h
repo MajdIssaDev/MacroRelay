@@ -51,7 +51,7 @@ enum MrFocusMode {
 };
 
 enum MrInputMode {
-  MR_INPUT_SILENT = 0,    /* PostMessage, no cursor / focus change */
+  MR_INPUT_SILENT = 0,    /* SendMessage (Clicador-style), no cursor / focus change */
   MR_INPUT_SNAPBACK = 1,  /* SendInput with instant cursor snap-back */
   MR_INPUT_AUTO = 2       /* Silent when possible; snap-back when blocked / elevated */
 };

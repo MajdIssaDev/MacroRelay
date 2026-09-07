@@ -50,7 +50,7 @@ struct Session {
   int repeat_count = 1;
   int duration_ms = 10000;
   int focus_mode = 0;
-  int input_mode = MR_INPUT_AUTO;
+  int input_mode = MR_INPUT_SILENT;
   std::string process;
   std::string title;
   std::vector<Step> steps;
@@ -243,13 +243,15 @@ bool IsHotkeyVk(int vk) {
   return vk == g_vk_play || vk == g_vk_once || vk == g_vk_record || vk == g_vk_panic;
 }
 
-void PushEvent(int kind, int code, int down) {
+void PushEvent(int kind, int code, int down, int x = 0, int y = 0, int has_pos = 0) {
   MrEvent e{};
   e.kind = kind;
   e.code = code;
   e.down = down;
   e.delay_ms = ConsumeDelay();
-  e.has_pos = 0;
+  e.x = x;
+  e.y = y;
+  e.has_pos = has_pos;
   std::lock_guard<std::mutex> lock(g_mu);
   g_recorded.push_back(e);
 }
@@ -310,7 +312,23 @@ LRESULT CALLBACK MouseProc(int code, WPARAM wParam, LPARAM lParam) {
       default:
         break;
     }
-    if (button >= 0) PushEvent(MR_KIND_MOUSE, button, down);
+    if (button >= 0) {
+      // Store client coords relative to the top-level window under the cursor so
+      // silent playback can SendMessage to that window without moving the cursor.
+      POINT pt = data->pt;
+      HWND hit = WindowFromPoint(pt);
+      HWND root = hit ? GetAncestor(hit, GA_ROOT) : nullptr;
+      int cx = 0, cy = 0, has_pos = 0;
+      if (root) {
+        POINT local = pt;
+        if (ScreenToClient(root, &local)) {
+          cx = local.x;
+          cy = local.y;
+          has_pos = 1;
+        }
+      }
+      PushEvent(MR_KIND_MOUSE, button, down, cx, cy, has_pos);
+    }
   }
   return CallNextHookEx(g_mouse, code, wParam, lParam);
 }
@@ -450,22 +468,27 @@ HWND SameRootOrNull(HWND root, HWND candidate) {
 }
 
 HWND ResolveLeafFromScreen(HWND root, POINT screen) {
+  // Prefer walking children of the known target. WindowFromPoint returns the
+  // topmost window at that screen point (often the foreground app), which is
+  // wrong when the target is in the background — the Clicador-style case.
+  if (root && IsWindow(root)) {
+    POINT local = screen;
+    if (ScreenToClient(root, &local)) {
+      HWND child = root;
+      for (int depth = 0; depth < 32; depth++) {
+        HWND next =
+            ChildWindowFromPointEx(child, local, CWP_SKIPINVISIBLE | CWP_SKIPDISABLED);
+        if (!next || next == child) break;
+        MapWindowPoints(child, next, &local, 1);
+        child = next;
+      }
+      return child;
+    }
+  }
+
   HWND fromPt = WindowFromPoint(screen);
   if (HWND ok = SameRootOrNull(root, fromPt)) return ok;
-
-  if (!root || !IsWindow(root)) return fromPt ? fromPt : root;
-
-  POINT local = screen;
-  if (!ScreenToClient(root, &local)) return root;
-
-  HWND child = root;
-  for (int depth = 0; depth < 32; depth++) {
-    HWND next = ChildWindowFromPointEx(child, local, CWP_SKIPINVISIBLE | CWP_SKIPDISABLED | CWP_SKIPTRANSPARENT);
-    if (!next || next == child) break;
-    MapWindowPoints(child, next, &local, 1);
-    child = next;
-  }
-  return child;
+  return fromPt ? fromPt : root;
 }
 
 struct ResolvedClick {
@@ -549,56 +572,138 @@ WPARAM MouseMoveKeys(int button) {
   }
 }
 
-bool PostMouseMessage(HWND hwnd, UINT msg, WPARAM wp, int x, int y) {
+LPARAM PackClientLParam(int x, int y) {
+  const int cx = (std::max)(-32768, (std::min)(32767, x));
+  const int cy = (std::max)(-32768, (std::min)(32767, y));
+  return MAKELPARAM(static_cast<WORD>(static_cast<short>(cx)),
+                    static_cast<WORD>(static_cast<short>(cy)));
+}
+
+const wchar_t* MsgName(UINT msg) {
+  switch (msg) {
+    case WM_MOUSEMOVE:
+      return L"WM_MOUSEMOVE";
+    case WM_LBUTTONDOWN:
+      return L"WM_LBUTTONDOWN";
+    case WM_LBUTTONUP:
+      return L"WM_LBUTTONUP";
+    case WM_RBUTTONDOWN:
+      return L"WM_RBUTTONDOWN";
+    case WM_RBUTTONUP:
+      return L"WM_RBUTTONUP";
+    case WM_MBUTTONDOWN:
+      return L"WM_MBUTTONDOWN";
+    case WM_MBUTTONUP:
+      return L"WM_MBUTTONUP";
+    case WM_XBUTTONDOWN:
+      return L"WM_XBUTTONDOWN";
+    case WM_XBUTTONUP:
+      return L"WM_XBUTTONUP";
+    default:
+      return L"WM_?";
+  }
+}
+
+void LogSilentSend(HWND root, HWND target, int x, int y, UINT msg, const wchar_t* api) {
+  wchar_t buf[384];
+  _snwprintf_s(buf, _TRUNCATE,
+               L"[MacroRelay Silent] API=%s root=%p target=%p client=(%d,%d) msg=%s (0x%04X) lParam=0x%08lX\n",
+               api, root, target, x, y, MsgName(msg), msg,
+               static_cast<unsigned long>(PackClientLParam(x, y)));
+  OutputDebugStringW(buf);
+}
+
+// Clicador-style ClickAppNoMove: SendMessage calls the target WndProc directly
+// without SetCursorPos / SetForegroundWindow / AttachThreadInput. PostMessage alone
+// often never runs for background / non-pumping game clients.
+bool SilentSendMouseMessage(HWND root, HWND hwnd, UINT msg, WPARAM wp, int x, int y) {
   if (!hwnd || !IsWindow(hwnd)) {
     g_last_input_status.store(2);
     return false;
   }
-  if (!PostMessageW(hwnd, msg, wp, MAKELPARAM(x, y))) {
+  const LPARAM lp = PackClientLParam(x, y);
+  LogSilentSend(root, hwnd, x, y, msg, L"SendMessageTimeoutW");
+  DWORD_PTR result = 0;
+  const LRESULT ok =
+      SendMessageTimeoutW(hwnd, msg, wp, lp, SMTO_ABORTIFHUNG | SMTO_NORMAL, 1000, &result);
+  if (!ok) {
     const DWORD err = GetLastError();
-    g_last_input_status.store(err == ERROR_ACCESS_DENIED || err == 5 ? 1 : 2);
-    return false;
+    g_last_input_status.store(err == ERROR_ACCESS_DENIED || err == 5 || err == ERROR_TIMEOUT ? 1 : 2);
+    wchar_t buf[192];
+    _snwprintf_s(buf, _TRUNCATE, L"[MacroRelay Silent] SendMessageTimeoutW FAILED err=%lu — trying PostMessageW\n",
+                 static_cast<unsigned long>(err));
+    OutputDebugStringW(buf);
+    LogSilentSend(root, hwnd, x, y, msg, L"PostMessageW");
+    if (!PostMessageW(hwnd, msg, wp, lp)) {
+      g_last_input_status.store(GetLastError() == ERROR_ACCESS_DENIED ? 1 : 2);
+      return false;
+    }
   }
   return true;
 }
 
-bool PostMouseEdge(HWND root, int button, bool down, int clientX, int clientY, bool has_pos,
-                   std::atomic<bool>* stop) {
+bool SilentDispatchToTargets(HWND root, HWND leaf, int rootX, int rootY, int leafX, int leafY, UINT msg,
+                             WPARAM wp) {
+  // Clicador ClickAppNoMove targets one "App Handle" (top-level) with client coords.
+  // Prefer that first — many game clients ignore child HWNDs.
+  bool ok = SilentSendMouseMessage(root, root, msg, wp, rootX, rootY);
+  // If a real child exists, also deliver there (Win32 controls). Same client message
+  // on an inert DirectX child is usually ignored, so this rarely double-fires in games.
+  if (leaf && leaf != root) {
+    SilentSendMouseMessage(root, leaf, msg, wp, leafX, leafY);
+  }
+  return ok;
+}
+
+bool SilentPostMouseEdge(HWND root, int button, bool down, int clientX, int clientY, bool has_pos,
+                         std::atomic<bool>* stop) {
   g_last_input_status.store(0);
+  if (!root || !IsWindow(root)) return false;
+
+  const int rootX = has_pos ? clientX : 0;
+  const int rootY = has_pos ? clientY : 0;
   ResolvedClick t = ResolveClickTarget(root, clientX, clientY, has_pos);
   UINT msg = 0;
   WPARAM wp = 0;
   MouseMsgParts(button, down, &msg, &wp);
 
   if (down) {
-    if (!PostMouseMessage(t.hwnd, WM_MOUSEMOVE, 0, t.x, t.y)) return false;
+    if (!SilentDispatchToTargets(root, t.hwnd, rootX, rootY, t.x, t.y, WM_MOUSEMOVE, 0)) return false;
     if (stop) InterruptibleSleep(*stop, kClickMoveDelayMs);
     else std::this_thread::sleep_for(std::chrono::milliseconds(kClickMoveDelayMs));
     if (stop && stop->load()) return false;
   }
-  return PostMouseMessage(t.hwnd, msg, wp, t.x, t.y);
+  return SilentDispatchToTargets(root, t.hwnd, rootX, rootY, t.x, t.y, msg, wp);
 }
 
-bool PostMouseClickSequence(HWND root, int button, int clientX, int clientY, bool has_pos,
-                            std::atomic<bool>& stop) {
+bool SilentPostMouseClickSequence(HWND root, int button, int clientX, int clientY, bool has_pos,
+                                  std::atomic<bool>& stop) {
   g_last_input_status.store(0);
+  if (!root || !IsWindow(root)) return false;
+
+  const int rootX = has_pos ? clientX : 0;
+  const int rootY = has_pos ? clientY : 0;
   ResolvedClick t = ResolveClickTarget(root, clientX, clientY, has_pos);
   UINT downMsg = 0, upMsg = 0;
   WPARAM downWp = 0, upWp = 0;
   MouseMsgParts(button, true, &downMsg, &downWp);
   MouseMsgParts(button, false, &upMsg, &upWp);
 
-  if (!PostMouseMessage(t.hwnd, WM_MOUSEMOVE, 0, t.x, t.y)) return false;
+  OutputDebugStringW(
+      L"[MacroRelay Silent] MOVE→DOWN→hold→UP via SendMessageTimeoutW (no cursor/focus)\n");
+  if (!SilentDispatchToTargets(root, t.hwnd, rootX, rootY, t.x, t.y, WM_MOUSEMOVE, 0)) return false;
   InterruptibleSleep(stop, kClickMoveDelayMs);
   if (stop.load()) return false;
-  if (!PostMouseMessage(t.hwnd, downMsg, downWp, t.x, t.y)) return false;
+  if (!SilentDispatchToTargets(root, t.hwnd, rootX, rootY, t.x, t.y, downMsg, downWp)) return false;
   InterruptibleSleep(stop, kClickHoldDelayMs);
   if (stop.load()) return false;
-  if (!PostMouseMessage(t.hwnd, WM_MOUSEMOVE, MouseMoveKeys(button), t.x, t.y)) return false;
-  return PostMouseMessage(t.hwnd, upMsg, upWp, t.x, t.y);
+  if (!SilentDispatchToTargets(root, t.hwnd, rootX, rootY, t.x, t.y, WM_MOUSEMOVE, MouseMoveKeys(button)))
+    return false;
+  return SilentDispatchToTargets(root, t.hwnd, rootX, rootY, t.x, t.y, upMsg, upWp);
 }
 
 void SendMouseClickAtScreen(POINT screen, int button) {
+  OutputDebugStringW(L"[MacroRelay SnapBack] SetCursorPos + SendInput click\n");
   POINT saved{};
   GetCursorPos(&saved);
   SetCursorPos(screen.x, screen.y);
@@ -612,6 +717,7 @@ void SendMouseClickAtScreen(POINT screen, int button) {
 }
 
 void SendMouseEdgeAtScreen(POINT screen, int button, bool down) {
+  OutputDebugStringW(L"[MacroRelay SnapBack] SetCursorPos + SendInput edge\n");
   POINT saved{};
   GetCursorPos(&saved);
   SetCursorPos(screen.x, screen.y);
@@ -623,6 +729,8 @@ void SendMouseEdgeAtScreen(POINT screen, int button, bool down) {
 }
 
 bool UseSnapBack(int input_mode, HWND hwnd) {
+  // Silent mode must never snap-back (no SetCursorPos / SendInput).
+  if (input_mode == MR_INPUT_SILENT) return false;
   if (input_mode == MR_INPUT_SNAPBACK) return true;
   if (input_mode == MR_INPUT_AUTO && TargetNeedsAdmin(hwnd)) {
     g_last_input_status.store(1);
@@ -637,9 +745,18 @@ void PlayPositionalMouse(HWND root, int button, bool down, int x, int y, bool ha
   if (!root) return;
 
   ResolvedClick t = ResolveClickTarget(root, x, y, has_pos);
-  const bool snap = UseSnapBack(input_mode, root);
 
-  if (snap) {
+  // Strict silent pathway: SendMessageTimeoutW only (no SetCursorPos / SendInput / focus APIs).
+  if (input_mode == MR_INPUT_SILENT) {
+    if (full_click && stop) {
+      SilentPostMouseClickSequence(root, button, x, y, has_pos, *stop);
+    } else {
+      SilentPostMouseEdge(root, button, down, x, y, has_pos, stop);
+    }
+    return;
+  }
+
+  if (UseSnapBack(input_mode, root)) {
     g_last_input_status.store(input_mode == MR_INPUT_AUTO ? 1 : 0);
     if (full_click) {
       SendMouseClickAtScreen(t.screen, button);
@@ -649,20 +766,25 @@ void PlayPositionalMouse(HWND root, int button, bool down, int x, int y, bool ha
     return;
   }
 
+  // Auto (non-elevated): try silent PostMessage first; snap-back only if post fails.
   bool ok = false;
   if (full_click && stop) {
-    ok = PostMouseClickSequence(root, button, x, y, has_pos, *stop);
+    ok = SilentPostMouseClickSequence(root, button, x, y, has_pos, *stop);
   } else {
-    ok = PostMouseEdge(root, button, down, x, y, has_pos, stop);
+    ok = SilentPostMouseEdge(root, button, down, x, y, has_pos, stop);
   }
-
   if (!ok && input_mode == MR_INPUT_AUTO) {
-    SendMouseClickAtScreen(t.screen, button);
+    OutputDebugStringW(L"[MacroRelay Auto] PostMessage failed — falling back to SnapBack\n");
+    if (full_click) {
+      SendMouseClickAtScreen(t.screen, button);
+    } else {
+      SendMouseEdgeAtScreen(t.screen, button, down);
+    }
   }
 }
 
 void PostMouse(HWND hwnd, int button, bool down, int x, int y) {
-  PostMouseEdge(hwnd, button, down, x, y, true, nullptr);
+  SilentPostMouseEdge(hwnd, button, down, x, y, true, nullptr);
 }
 
 void PostText(HWND hwnd, const std::wstring& text) {
@@ -682,23 +804,23 @@ void PostDrag(HWND hwnd, int button, int x1, int y1, int x2, int y2) {
   ResolvedClick b = ResolveClickTarget(hwnd, x2, y2, true);
   HWND target = a.hwnd ? a.hwnd : hwnd;
   WPARAM mk = MouseMoveKeys(button);
-  PostMouseMessage(target, WM_MOUSEMOVE, 0, a.x, a.y);
+  SilentSendMouseMessage(hwnd, target, WM_MOUSEMOVE, 0, a.x, a.y);
   std::this_thread::sleep_for(std::chrono::milliseconds(kClickMoveDelayMs));
   UINT downMsg = 0;
   WPARAM downWp = 0;
   MouseMsgParts(button, true, &downMsg, &downWp);
-  PostMouseMessage(target, downMsg, downWp, a.x, a.y);
+  SilentSendMouseMessage(hwnd, target, downMsg, downWp, a.x, a.y);
   const int n = 12;
   for (int i = 1; i <= n; i++) {
     const int x = a.x + (b.x - a.x) * i / n;
     const int y = a.y + (b.y - a.y) * i / n;
-    PostMouseMessage(target, WM_MOUSEMOVE, mk, x, y);
+    SilentSendMouseMessage(hwnd, target, WM_MOUSEMOVE, mk, x, y);
     std::this_thread::sleep_for(std::chrono::milliseconds(8));
   }
   UINT upMsg = 0;
   WPARAM upWp = 0;
   MouseMsgParts(button, false, &upMsg, &upWp);
-  PostMouseMessage(target, upMsg, upWp, b.x, b.y);
+  SilentSendMouseMessage(hwnd, target, upMsg, upWp, b.x, b.y);
 }
 
 void SendWheel(int delta) {
@@ -754,13 +876,16 @@ void EnsureRestoredNoActivate(HWND hwnd) {
 
 void PlayStep(const Step& step, int focus_mode, int input_mode, HWND hwnd, std::atomic<bool>& stop) {
   const bool background = focus_mode == MR_FOCUS_BACKGROUND && hwnd != nullptr;
+  const bool silent = input_mode == MR_INPUT_SILENT;
 
-  if (focus_mode == MR_FOCUS_TARGET && hwnd && GetForegroundWindow() != hwnd) {
+  // Silent must never steal focus (no AttachThreadInput / SetForegroundWindow).
+  if (!silent && focus_mode == MR_FOCUS_TARGET && hwnd && GetForegroundWindow() != hwnd) {
     ActivateWindow(hwnd);
   }
 
   if (background) {
-    EnsureRestoredNoActivate(hwnd);
+    // Silent: do not ShowWindow / SetWindowPos — leave Z-order and minimize state alone.
+    if (!silent) EnsureRestoredNoActivate(hwnd);
     if (TargetNeedsAdmin(hwnd)) g_last_input_status.store(1);
     int cx = step.x;
     int cy = step.y;
@@ -863,7 +988,7 @@ void WorkerMain(Session* s) {
   int repeat_count = 1;
   int duration_ms = 10000;
   int focus_mode = 0;
-  int input_mode = MR_INPUT_AUTO;
+  int input_mode = MR_INPUT_SILENT;
   std::string process;
   std::string title;
   {
@@ -920,8 +1045,9 @@ void WorkerMain(Session* s) {
       if (next.kind == MR_KIND_MOUSE && !next.down && next.code == step.code && next.has_pos &&
           next.x == step.x && next.y == step.y) {
         index++;
-        if (focus_mode == MR_FOCUS_BACKGROUND && hwnd) EnsureRestoredNoActivate(hwnd);
-        if (focus_mode == MR_FOCUS_TARGET && hwnd && GetForegroundWindow() != hwnd) {
+        const bool silent = input_mode == MR_INPUT_SILENT;
+        if (!silent && focus_mode == MR_FOCUS_BACKGROUND && hwnd) EnsureRestoredNoActivate(hwnd);
+        if (!silent && focus_mode == MR_FOCUS_TARGET && hwnd && GetForegroundWindow() != hwnd) {
           ActivateWindow(hwnd);
         }
         HWND target = hwnd ? hwnd : GetForegroundWindow();
@@ -948,7 +1074,7 @@ Session* FindSession(int id) {
 
 extern "C" {
 
-const char* mr_version(void) { return "1.5.0"; }
+const char* mr_version(void) { return "1.5.1"; }
 
 int32_t mr_record_start(int32_t keep_delays) {
   std::lock_guard<std::mutex> lock(g_mu);
